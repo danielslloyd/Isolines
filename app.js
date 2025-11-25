@@ -13,6 +13,12 @@ class ContourMapApp {
         this.originalContours = null;
         this.currentContours = null;
         this.samples = [];
+        this.currentPane = 1;
+        this.previewCanvas = null;
+        this.previewCtx = null;
+        this.heatmapCanvas = null;
+        this.heatmapCtx = null;
+        this.refinementPoints = [];
 
         this.init();
     }
@@ -20,6 +26,7 @@ class ContourMapApp {
     init() {
         this.initMap();
         this.initControls();
+        this.initPanes();
         this.setupRightClickSelection();
     }
 
@@ -60,6 +67,104 @@ class ContourMapApp {
         document.getElementById('export-btn').addEventListener('click', () => {
             this.exportSVG();
         });
+    }
+
+    initPanes() {
+        // Setup pane headers for toggling
+        const paneHeaders = document.querySelectorAll('.pane-header');
+        paneHeaders.forEach(header => {
+            header.addEventListener('click', () => {
+                const pane = header.parentElement;
+                const paneNumber = parseInt(pane.dataset.pane);
+                this.togglePane(paneNumber);
+            });
+        });
+
+        // Initialize preview canvas
+        this.previewCanvas = document.getElementById('preview-canvas');
+        this.previewCtx = this.previewCanvas.getContext('2d');
+
+        // Initialize heatmap canvas
+        this.heatmapCanvas = document.getElementById('heatmap-canvas');
+        this.heatmapCtx = this.heatmapCanvas.getContext('2d');
+
+        // Setup pane 2 controls
+        const edgeSamplesInput = document.getElementById('pane-edge-samples');
+        const interiorSamplesInput = document.getElementById('pane-interior-samples');
+
+        edgeSamplesInput.addEventListener('input', () => this.updatePreview());
+        interiorSamplesInput.addEventListener('input', () => this.updatePreview());
+
+        // Lock points button
+        document.getElementById('lock-points-btn').addEventListener('click', () => {
+            this.lockPointsAndFetchElevations();
+        });
+
+        // Generate contours button
+        document.getElementById('generate-contours-btn').addEventListener('click', () => {
+            this.generateContoursFromElevations();
+        });
+
+        // Pane 4 controls
+        const paneSimplifySlider = document.getElementById('pane-simplify-slider');
+        const paneSimplifyValue = document.getElementById('pane-simplify-value');
+        paneSimplifySlider.addEventListener('input', (e) => {
+            const value = e.target.value;
+            paneSimplifyValue.textContent = value + '%';
+            this.applySimplification(value / 100);
+        });
+
+        document.getElementById('pane-export-btn').addEventListener('click', () => {
+            this.exportSVG();
+        });
+
+        // Open first pane by default
+        this.openPane(1);
+    }
+
+    togglePane(paneNumber) {
+        const pane = document.querySelector(`.workflow-pane[data-pane="${paneNumber}"]`);
+        if (pane.classList.contains('open')) {
+            pane.classList.remove('open');
+        } else {
+            this.openPane(paneNumber);
+        }
+    }
+
+    openPane(paneNumber) {
+        // Close all panes
+        document.querySelectorAll('.workflow-pane').forEach(p => {
+            p.classList.remove('open');
+        });
+
+        // Open the selected pane
+        const pane = document.querySelector(`.workflow-pane[data-pane="${paneNumber}"]`);
+        if (pane) {
+            pane.classList.add('open');
+            this.currentPane = paneNumber;
+        }
+    }
+
+    completePane(paneNumber) {
+        const pane = document.querySelector(`.workflow-pane[data-pane="${paneNumber}"]`);
+        if (pane) {
+            const header = pane.querySelector('.pane-header');
+            header.classList.add('completed');
+            header.classList.remove('active');
+            const icon = header.querySelector('.status-icon');
+            icon.textContent = '✓';
+        }
+    }
+
+    activatePane(paneNumber) {
+        const pane = document.querySelector(`.workflow-pane[data-pane="${paneNumber}"]`);
+        if (pane) {
+            const header = pane.querySelector('.pane-header');
+            header.classList.add('active');
+            header.classList.remove('completed');
+            const icon = header.querySelector('.status-icon');
+            icon.textContent = '⏵';
+        }
     }
 
     setupRightClickSelection() {
@@ -116,6 +221,12 @@ class ContourMapApp {
                 if (this.selectionRectangle) {
                     this.selectedBounds = this.selectionRectangle.getBounds();
                     this.updateBoundsDisplay();
+
+                    // Complete pane 1 and open pane 2
+                    this.completePane(1);
+                    this.activatePane(2);
+                    this.openPane(2);
+                    this.updatePreview();
                 }
             }
         });
@@ -130,15 +241,19 @@ class ContourMapApp {
 
     updateBoundsDisplay() {
         const info = document.getElementById('bounds-info');
+        const paneInfo = document.getElementById('pane-bounds-info');
         if (this.selectedBounds) {
             const sw = this.selectedBounds.getSouthWest();
             const ne = this.selectedBounds.getNorthEast();
-            info.innerHTML = `
+            const html = `
                 <strong>SW:</strong> ${sw.lat.toFixed(6)}, ${sw.lng.toFixed(6)}<br>
                 <strong>NE:</strong> ${ne.lat.toFixed(6)}, ${ne.lng.toFixed(6)}
             `;
+            if (info) info.innerHTML = html;
+            if (paneInfo) paneInfo.innerHTML = html;
         } else {
-            info.textContent = 'No area selected';
+            if (info) info.textContent = 'No area selected';
+            if (paneInfo) paneInfo.textContent = 'No area selected';
         }
     }
 
@@ -379,6 +494,7 @@ class ContourMapApp {
 
             await this.fetchElevations(newPoints);
             this.samples.push(...newPoints);
+            this.refinementPoints = newPoints; // Track for highlighting
         }
     }
 
@@ -526,6 +642,7 @@ class ContourMapApp {
         }
 
         this.displayContours();
+        this.updateSVGPreview();
     }
 
     clearContours() {
@@ -598,10 +715,345 @@ class ContourMapApp {
         this.showStatus('SVG exported successfully!', 'success');
     }
 
+    updatePreview() {
+        if (!this.selectedBounds) return;
+
+        const sw = this.selectedBounds.getSouthWest();
+        const ne = this.selectedBounds.getNorthEast();
+
+        // Set canvas size
+        const canvasWidth = this.previewCanvas.width = 360;
+        const aspectRatio = (ne.lat - sw.lat) / (ne.lng - sw.lng);
+        const canvasHeight = this.previewCanvas.height = canvasWidth * aspectRatio;
+
+        const ctx = this.previewCtx;
+
+        // Clear canvas
+        ctx.fillStyle = '#f9f9f9';
+        ctx.fillRect(0, 0, canvasWidth, canvasHeight);
+
+        // Draw border (same aspect ratio as selected area)
+        ctx.strokeStyle = '#3498db';
+        ctx.lineWidth = 2;
+        ctx.strokeRect(0, 0, canvasWidth, canvasHeight);
+
+        // Get sample parameters
+        const edgeSamples = parseInt(document.getElementById('pane-edge-samples').value);
+        const interiorSamples = parseInt(document.getElementById('pane-interior-samples').value);
+
+        // Preview points (simplified calculation)
+        const bounds = {
+            minX: sw.lng,
+            maxX: ne.lng,
+            minY: sw.lat,
+            maxY: ne.lat
+        };
+
+        const width = bounds.maxX - bounds.minX;
+        const height = bounds.maxY - bounds.minY;
+
+        // Calculate edge distribution
+        const xSamples = Math.round(Math.sqrt(edgeSamples * (width / height)));
+        const ySamples = Math.round(edgeSamples / xSamples);
+
+        // Draw edge points
+        ctx.fillStyle = '#e74c3c';
+
+        // Top edge
+        for (let i = 0; i < xSamples; i++) {
+            const x = (i / (xSamples - 1)) * canvasWidth;
+            ctx.beginPath();
+            ctx.arc(x, 0, 3, 0, Math.PI * 2);
+            ctx.fill();
+        }
+
+        // Bottom edge
+        for (let i = 0; i < xSamples; i++) {
+            const x = (i / (xSamples - 1)) * canvasWidth;
+            ctx.beginPath();
+            ctx.arc(x, canvasHeight, 3, 0, Math.PI * 2);
+            ctx.fill();
+        }
+
+        // Left edge
+        for (let i = 1; i < ySamples - 1; i++) {
+            const y = (i / (ySamples - 1)) * canvasHeight;
+            ctx.beginPath();
+            ctx.arc(0, y, 3, 0, Math.PI * 2);
+            ctx.fill();
+        }
+
+        // Right edge
+        for (let i = 1; i < ySamples - 1; i++) {
+            const y = (i / (ySamples - 1)) * canvasHeight;
+            ctx.beginPath();
+            ctx.arc(canvasWidth, y, 3, 0, Math.PI * 2);
+            ctx.fill();
+        }
+
+        // Draw interior points (approximation using Poisson-disc)
+        ctx.fillStyle = '#3498db';
+        const minDistance = Math.min(canvasWidth, canvasHeight) / Math.sqrt(interiorSamples) * 0.8;
+
+        const canvasBounds = {
+            minX: 10,
+            maxX: canvasWidth - 10,
+            minY: 10,
+            maxY: canvasHeight - 10
+        };
+
+        const poisson = new PoissonDisc(canvasBounds, minDistance);
+        const interiorPoints = poisson.generate(interiorSamples);
+
+        interiorPoints.forEach(p => {
+            ctx.beginPath();
+            ctx.arc(p.x, p.y, 2, 0, Math.PI * 2);
+            ctx.fill();
+        });
+
+        // Add legend
+        ctx.font = '12px -apple-system, sans-serif';
+        ctx.fillStyle = '#e74c3c';
+        ctx.fillRect(10, 10, 12, 12);
+        ctx.fillStyle = '#2c3e50';
+        ctx.fillText('Edge samples', 28, 20);
+
+        ctx.fillStyle = '#3498db';
+        ctx.fillRect(10, 30, 12, 12);
+        ctx.fillStyle = '#2c3e50';
+        ctx.fillText('Interior samples', 28, 40);
+    }
+
+    async lockPointsAndFetchElevations() {
+        if (!this.selectedBounds) return;
+
+        const btn = document.getElementById('lock-points-btn');
+        btn.disabled = true;
+        btn.textContent = 'Fetching elevations...';
+
+        try {
+            // Generate sample points
+            const edgeSamples = parseInt(document.getElementById('pane-edge-samples').value);
+            const interiorSamples = parseInt(document.getElementById('pane-interior-samples').value);
+
+            this.samples = this.generateSamplePoints(edgeSamples, interiorSamples);
+
+            // Fetch elevations
+            await this.fetchElevations(this.samples);
+
+            // Adaptive refinement
+            await this.adaptiveRefinement(this.samples);
+
+            // Complete pane 2 and open pane 3
+            this.completePane(2);
+            this.activatePane(3);
+            this.openPane(3);
+
+            // Draw heatmap
+            this.drawHeatmap();
+
+        } catch (error) {
+            console.error('Error fetching elevations:', error);
+            alert('Error: ' + error.message);
+        } finally {
+            btn.disabled = false;
+            btn.textContent = 'Lock Points & Get Elevations';
+        }
+    }
+
+    drawHeatmap() {
+        if (!this.samples || this.samples.length === 0) return;
+
+        const sw = this.selectedBounds.getSouthWest();
+        const ne = this.selectedBounds.getNorthEast();
+
+        // Set canvas size
+        const canvasWidth = this.heatmapCanvas.width = 360;
+        const aspectRatio = (ne.lat - sw.lat) / (ne.lng - sw.lng);
+        const canvasHeight = this.heatmapCanvas.height = canvasWidth * aspectRatio;
+
+        const ctx = this.heatmapCtx;
+
+        // Clear canvas
+        ctx.fillStyle = '#f9f9f9';
+        ctx.fillRect(0, 0, canvasWidth, canvasHeight);
+
+        // Draw border
+        ctx.strokeStyle = '#3498db';
+        ctx.lineWidth = 2;
+        ctx.strokeRect(0, 0, canvasWidth, canvasHeight);
+
+        // Find min/max elevations
+        let minElev = Infinity;
+        let maxElev = -Infinity;
+        this.samples.forEach(p => {
+            if (p.elevation !== null) {
+                minElev = Math.min(minElev, p.elevation);
+                maxElev = Math.max(maxElev, p.elevation);
+            }
+        });
+
+        const elevRange = maxElev - minElev;
+
+        // Convert geo coordinates to canvas coordinates
+        const width = ne.lng - sw.lng;
+        const height = ne.lat - sw.lat;
+
+        // Draw points as fat dots with heatmap colors
+        this.samples.forEach((p, index) => {
+            if (p.elevation === null) return;
+
+            const x = ((p.x - sw.lng) / width) * canvasWidth;
+            const y = canvasHeight - ((p.y - sw.lat) / height) * canvasHeight;
+
+            const normalized = elevRange > 0 ? (p.elevation - minElev) / elevRange : 0;
+            const hue = (1 - normalized) * 240; // 240 = blue (low), 0 = red (high)
+            ctx.fillStyle = `hsl(${hue}, 70%, 50%)`;
+
+            // Fat dots
+            ctx.beginPath();
+            ctx.arc(x, y, 4, 0, Math.PI * 2);
+            ctx.fill();
+
+            // Highlight refinement points (if they were added in adaptive refinement)
+            if (index >= this.samples.length - this.refinementPoints.length) {
+                ctx.strokeStyle = '#f39c12';
+                ctx.lineWidth = 2;
+                ctx.beginPath();
+                ctx.arc(x, y, 6, 0, Math.PI * 2);
+                ctx.stroke();
+            }
+        });
+
+        // Add hover info (stored for later use)
+        this.heatmapCanvas.addEventListener('mousemove', (e) => {
+            const rect = this.heatmapCanvas.getBoundingClientRect();
+            const mx = e.clientX - rect.left;
+            const my = e.clientY - rect.top;
+
+            // Find closest point
+            let closestPoint = null;
+            let closestDist = Infinity;
+
+            this.samples.forEach(p => {
+                if (p.elevation === null) return;
+
+                const x = ((p.x - sw.lng) / width) * canvasWidth;
+                const y = canvasHeight - ((p.y - sw.lat) / height) * canvasHeight;
+
+                const dist = Math.sqrt((mx - x) ** 2 + (my - y) ** 2);
+                if (dist < 8 && dist < closestDist) {
+                    closestPoint = p;
+                    closestDist = dist;
+                }
+            });
+
+            if (closestPoint) {
+                this.heatmapCanvas.title = `Elevation: ${closestPoint.elevation.toFixed(1)}m`;
+                this.heatmapCanvas.style.cursor = 'pointer';
+            } else {
+                this.heatmapCanvas.title = '';
+                this.heatmapCanvas.style.cursor = 'default';
+            }
+        });
+
+        // Update stats
+        const statsDiv = document.getElementById('elevation-stats');
+        statsDiv.innerHTML = `
+            <strong>Elevation Range:</strong> ${minElev.toFixed(1)}m - ${maxElev.toFixed(1)}m<br>
+            <strong>Total Points:</strong> ${this.samples.length}<br>
+            <strong>Refinement Points:</strong> ${this.refinementPoints.length}
+        `;
+    }
+
+    async generateContoursFromElevations() {
+        const btn = document.getElementById('generate-contours-btn');
+        btn.disabled = true;
+        btn.textContent = 'Generating contours...';
+
+        try {
+            // Create grid
+            const grid = this.createGrid(this.samples);
+
+            // Generate contours
+            const interval = parseFloat(document.getElementById('pane-contour-interval').value);
+            this.generateContourLines(grid, interval);
+
+            // Display on map
+            this.displayContours();
+
+            // Complete pane 3 and open pane 4
+            this.completePane(3);
+            this.activatePane(4);
+            this.openPane(4);
+
+            // Show SVG preview
+            this.updateSVGPreview();
+
+        } catch (error) {
+            console.error('Error generating contours:', error);
+            alert('Error: ' + error.message);
+        } finally {
+            btn.disabled = false;
+            btn.textContent = 'Generate Contours';
+        }
+    }
+
+    updateSVGPreview() {
+        if (!this.currentContours) return;
+
+        const sw = this.selectedBounds.getSouthWest();
+        const ne = this.selectedBounds.getNorthEast();
+
+        // Calculate SVG dimensions (preserve aspect ratio)
+        const width = 340;
+        const aspectRatio = (ne.lat - sw.lat) / (ne.lng - sw.lng);
+        const height = width * aspectRatio;
+
+        // Create SVG
+        let svg = `<svg width="${width}" height="${height}" viewBox="0 0 ${width} ${height}" xmlns="http://www.w3.org/2000/svg">
+    <rect width="100%" height="100%" fill="white"/>
+    <g id="contours">
+`;
+
+        const levels = Object.keys(this.currentContours).map(Number).sort((a, b) => a - b);
+        const minLevel = Math.min(...levels);
+        const maxLevel = Math.max(...levels);
+        const range = maxLevel - minLevel;
+
+        for (const level in this.currentContours) {
+            const lines = this.currentContours[level];
+            const normalized = range > 0 ? (parseFloat(level) - minLevel) / range : 0;
+            const color = this.getColorForElevation(normalized);
+
+            lines.forEach(line => {
+                if (line.length < 2) return;
+
+                let pathData = '';
+                line.forEach((point, index) => {
+                    const x = ((point.x - sw.lng) / (ne.lng - sw.lng)) * width;
+                    const y = height - ((point.y - sw.lat) / (ne.lat - sw.lat)) * height;
+                    pathData += (index === 0 ? 'M' : 'L') + x.toFixed(2) + ',' + y.toFixed(2) + ' ';
+                });
+
+                svg += `        <path d="${pathData}" stroke="${color}" fill="none" stroke-width="1.5" opacity="0.7"/>\n`;
+            });
+        }
+
+        svg += `    </g>
+</svg>`;
+
+        // Display preview
+        const preview = document.getElementById('svg-preview');
+        preview.innerHTML = svg;
+    }
+
     showStatus(message, type = 'info') {
         const status = document.getElementById('status');
-        status.textContent = message;
-        status.className = 'show ' + type;
+        if (status) {
+            status.textContent = message;
+            status.className = 'show ' + type;
+        }
     }
 
     delay(ms) {

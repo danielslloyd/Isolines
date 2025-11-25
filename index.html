@@ -182,6 +182,144 @@
         #simplify-controls.show {
             display: block;
         }
+
+        /* Collapsible Panes */
+        #panes-container {
+            position: absolute;
+            left: 0;
+            top: 0;
+            bottom: 0;
+            width: 400px;
+            display: flex;
+            flex-direction: column;
+            background: rgba(255, 255, 255, 0.95);
+            box-shadow: 2px 0 8px rgba(0,0,0,0.15);
+            z-index: 1000;
+            overflow: hidden;
+        }
+
+        .workflow-pane {
+            display: flex;
+            flex-direction: column;
+            border-bottom: 2px solid #e0e0e0;
+            transition: all 0.3s ease;
+        }
+
+        .pane-header {
+            padding: 15px 20px;
+            background: #34495e;
+            color: white;
+            cursor: pointer;
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            user-select: none;
+        }
+
+        .pane-header:hover {
+            background: #2c3e50;
+        }
+
+        .pane-header.completed {
+            background: #27ae60;
+        }
+
+        .pane-header.completed:hover {
+            background: #229954;
+        }
+
+        .pane-header.active {
+            background: #3498db;
+        }
+
+        .pane-header.active:hover {
+            background: #2980b9;
+        }
+
+        .pane-header h3 {
+            font-size: 16px;
+            font-weight: 600;
+            margin: 0;
+        }
+
+        .pane-header .status-icon {
+            font-size: 20px;
+        }
+
+        .pane-content {
+            max-height: 0;
+            overflow: hidden;
+            transition: max-height 0.3s ease;
+            background: white;
+        }
+
+        .workflow-pane.open .pane-content {
+            max-height: 2000px;
+        }
+
+        .pane-content-inner {
+            padding: 20px;
+        }
+
+        .preview-canvas {
+            width: 100%;
+            height: 250px;
+            border: 2px solid #ddd;
+            border-radius: 4px;
+            background: white;
+            margin: 10px 0;
+        }
+
+        .heatmap-canvas {
+            width: 100%;
+            height: 300px;
+            border: 2px solid #ddd;
+            border-radius: 4px;
+            background: white;
+            margin: 10px 0;
+            position: relative;
+        }
+
+        .svg-preview {
+            width: 100%;
+            max-height: 400px;
+            border: 2px solid #ddd;
+            border-radius: 4px;
+            background: white;
+            margin: 10px 0;
+            overflow: auto;
+        }
+
+        .pane-button {
+            width: 100%;
+            padding: 12px;
+            background: #3498db;
+            color: white;
+            border: none;
+            border-radius: 4px;
+            font-size: 14px;
+            font-weight: 600;
+            cursor: pointer;
+            transition: background 0.2s;
+            margin-top: 10px;
+        }
+
+        .pane-button:hover {
+            background: #2980b9;
+        }
+
+        .pane-button:disabled {
+            background: #bdc3c7;
+            cursor: not-allowed;
+        }
+
+        .pane-button.success {
+            background: #27ae60;
+        }
+
+        .pane-button.success:hover {
+            background: #229954;
+        }
     </style>
 </head>
 <body>
@@ -190,7 +328,87 @@
     </div>
 
     <div id="main-container">
-        <div id="map"></div>
+        <div id="map">
+            <div id="panes-container">
+                <!-- Pane 1: Select Area -->
+                <div class="workflow-pane" data-pane="1">
+                    <div class="pane-header active">
+                        <h3>1. Select Area</h3>
+                        <span class="status-icon">⬜</span>
+                    </div>
+                    <div class="pane-content">
+                        <div class="pane-content-inner">
+                            <div class="instruction">
+                                Right-click and drag on the map to select an area for contour generation.
+                            </div>
+                            <div class="control-group">
+                                <label>Selected Bounds:</label>
+                                <div class="info-box" id="pane-bounds-info">No area selected</div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Pane 2: Configure Points -->
+                <div class="workflow-pane" data-pane="2">
+                    <div class="pane-header">
+                        <h3>2. Configure Points</h3>
+                        <span class="status-icon">⬜</span>
+                    </div>
+                    <div class="pane-content">
+                        <div class="pane-content-inner">
+                            <div class="control-group">
+                                <label>Total Edge Samples (N):</label>
+                                <input type="number" id="pane-edge-samples" value="100" min="20" max="500" step="10">
+                            </div>
+                            <div class="control-group">
+                                <label>Interior Samples (Poisson-disc):</label>
+                                <input type="number" id="pane-interior-samples" value="100" min="20" max="1000" step="10">
+                            </div>
+                            <canvas id="preview-canvas" class="preview-canvas"></canvas>
+                            <button class="pane-button" id="lock-points-btn">Lock Points & Get Elevations</button>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Pane 3: Elevation Sampling -->
+                <div class="workflow-pane" data-pane="3">
+                    <div class="pane-header">
+                        <h3>3. Elevation Sampling</h3>
+                        <span class="status-icon">⬜</span>
+                    </div>
+                    <div class="pane-content">
+                        <div class="pane-content-inner">
+                            <canvas id="heatmap-canvas" class="heatmap-canvas"></canvas>
+                            <div id="elevation-stats" class="info-box"></div>
+                            <button class="pane-button" id="generate-contours-btn">Generate Contours</button>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Pane 4: SVG Export -->
+                <div class="workflow-pane" data-pane="4">
+                    <div class="pane-header">
+                        <h3>4. Export SVG</h3>
+                        <span class="status-icon">⬜</span>
+                    </div>
+                    <div class="pane-content">
+                        <div class="pane-content-inner">
+                            <div class="control-group">
+                                <label>Simplification: <span class="range-value" id="pane-simplify-value">0%</span></label>
+                                <input type="range" id="pane-simplify-slider" min="0" max="100" value="0" step="1">
+                            </div>
+                            <div class="control-group">
+                                <label>Contour Interval (meters):</label>
+                                <input type="number" id="pane-contour-interval" value="10" min="1" max="100" step="1">
+                            </div>
+                            <div id="svg-preview" class="svg-preview"></div>
+                            <button class="pane-button success" id="pane-export-btn">Export SVG</button>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
 
         <div id="controls">
             <div class="control-section">
