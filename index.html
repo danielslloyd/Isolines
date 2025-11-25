@@ -1,0 +1,257 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Contour Map Creator</title>
+    <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, Cantarell, sans-serif;
+            display: flex;
+            flex-direction: column;
+            height: 100vh;
+            background: #f5f5f5;
+        }
+
+        #header {
+            background: #2c3e50;
+            color: white;
+            padding: 15px 20px;
+            box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+        }
+
+        #header h1 {
+            font-size: 24px;
+            font-weight: 600;
+        }
+
+        #main-container {
+            display: flex;
+            flex: 1;
+            overflow: hidden;
+        }
+
+        #map {
+            flex: 1;
+            position: relative;
+        }
+
+        #controls {
+            width: 350px;
+            background: white;
+            padding: 20px;
+            overflow-y: auto;
+            box-shadow: -2px 0 4px rgba(0,0,0,0.1);
+        }
+
+        .control-section {
+            margin-bottom: 25px;
+            padding-bottom: 20px;
+            border-bottom: 1px solid #e0e0e0;
+        }
+
+        .control-section:last-child {
+            border-bottom: none;
+        }
+
+        .control-section h3 {
+            font-size: 16px;
+            margin-bottom: 12px;
+            color: #2c3e50;
+        }
+
+        .control-group {
+            margin-bottom: 15px;
+        }
+
+        .control-group label {
+            display: block;
+            margin-bottom: 5px;
+            font-size: 14px;
+            color: #555;
+        }
+
+        .control-group input[type="number"],
+        .control-group input[type="text"] {
+            width: 100%;
+            padding: 8px;
+            border: 1px solid #ddd;
+            border-radius: 4px;
+            font-size: 14px;
+        }
+
+        .control-group input[type="range"] {
+            width: 100%;
+        }
+
+        .range-value {
+            display: inline-block;
+            margin-left: 10px;
+            font-weight: 600;
+            color: #2c3e50;
+        }
+
+        button {
+            width: 100%;
+            padding: 12px;
+            background: #3498db;
+            color: white;
+            border: none;
+            border-radius: 4px;
+            font-size: 14px;
+            font-weight: 600;
+            cursor: pointer;
+            transition: background 0.2s;
+        }
+
+        button:hover {
+            background: #2980b9;
+        }
+
+        button:disabled {
+            background: #bdc3c7;
+            cursor: not-allowed;
+        }
+
+        button.secondary {
+            background: #95a5a6;
+        }
+
+        button.secondary:hover {
+            background: #7f8c8d;
+        }
+
+        #status {
+            margin-top: 15px;
+            padding: 10px;
+            background: #ecf0f1;
+            border-radius: 4px;
+            font-size: 13px;
+            color: #2c3e50;
+            display: none;
+        }
+
+        #status.show {
+            display: block;
+        }
+
+        #status.error {
+            background: #e74c3c;
+            color: white;
+        }
+
+        #status.success {
+            background: #2ecc71;
+            color: white;
+        }
+
+        .info-box {
+            background: #e8f4f8;
+            padding: 10px;
+            border-radius: 4px;
+            font-size: 12px;
+            color: #2c3e50;
+            line-height: 1.4;
+        }
+
+        .selection-box {
+            border: 2px dashed #3498db;
+            background: rgba(52, 152, 219, 0.1);
+        }
+
+        .instruction {
+            background: #fff3cd;
+            padding: 12px;
+            border-radius: 4px;
+            font-size: 13px;
+            margin-bottom: 15px;
+            border-left: 4px solid #ffc107;
+        }
+
+        #simplify-controls {
+            display: none;
+        }
+
+        #simplify-controls.show {
+            display: block;
+        }
+    </style>
+</head>
+<body>
+    <div id="header">
+        <h1>Contour Map Creator</h1>
+    </div>
+
+    <div id="main-container">
+        <div id="map"></div>
+
+        <div id="controls">
+            <div class="control-section">
+                <div class="instruction">
+                    Right-click and drag on the map to select an area for contour generation.
+                </div>
+
+                <div class="control-group">
+                    <label>Selected Bounds:</label>
+                    <div class="info-box" id="bounds-info">No area selected</div>
+                </div>
+            </div>
+
+            <div class="control-section">
+                <h3>Sampling Parameters</h3>
+
+                <div class="control-group">
+                    <label>Total Edge Samples (N):</label>
+                    <input type="number" id="edge-samples" value="100" min="20" max="500" step="10">
+                </div>
+
+                <div class="control-group">
+                    <label>Interior Samples (Poisson-disc):</label>
+                    <input type="number" id="interior-samples" value="100" min="20" max="1000" step="10">
+                </div>
+            </div>
+
+            <div class="control-section">
+                <h3>Contour Parameters</h3>
+
+                <div class="control-group">
+                    <label>Contour Interval (meters):</label>
+                    <input type="number" id="contour-interval" value="10" min="1" max="100" step="1">
+                </div>
+
+                <div class="control-group">
+                    <button id="generate-btn">Generate Contours</button>
+                </div>
+            </div>
+
+            <div class="control-section" id="simplify-controls">
+                <h3>Simplification</h3>
+
+                <div class="control-group">
+                    <label>Simplification: <span class="range-value" id="simplify-value">0%</span></label>
+                    <input type="range" id="simplify-slider" min="0" max="100" value="0" step="1">
+                </div>
+
+                <div class="control-group">
+                    <button id="export-btn" class="secondary">Export SVG</button>
+                </div>
+            </div>
+
+            <div id="status"></div>
+        </div>
+    </div>
+
+    <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+    <script src="poisson-disc.js"></script>
+    <script src="conrec.js"></script>
+    <script src="visvalingam.js"></script>
+    <script src="app.js"></script>
+</body>
+</html>
