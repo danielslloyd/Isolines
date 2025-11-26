@@ -99,6 +99,17 @@ class ContourMapApp {
             this.applySimplification(value / 100);
         });
 
+        // Contour interval changes should regenerate contours
+        const contourIntervalInput = document.getElementById('pane-contour-interval');
+        contourIntervalInput.addEventListener('input', () => {
+            if (this.samples && this.samples.length > 0) {
+                const interval = parseFloat(contourIntervalInput.value);
+                this.generateContourLinesFromTriangles(this.samples, interval);
+                this.displayContours();
+                this.updateSVGPreview();
+            }
+        });
+
         document.getElementById('pane-export-btn').addEventListener('click', () => {
             this.exportSVG();
         });
@@ -165,7 +176,10 @@ class ContourMapApp {
         mapContainer.addEventListener('mousedown', (e) => {
             if (e.button === 2) { // Right-click
                 this.isSelecting = true;
-                this.startPoint = this.map.containerPointToLatLng([e.clientX, e.clientY]);
+                const rect = mapContainer.getBoundingClientRect();
+                const x = e.clientX - rect.left;
+                const y = e.clientY - rect.top;
+                this.startPoint = this.map.containerPointToLatLng([x, y]);
 
                 // Remove existing selection
                 if (this.selectionRectangle) {
@@ -182,7 +196,10 @@ class ContourMapApp {
         // Mouse move - update selection
         mapContainer.addEventListener('mousemove', (e) => {
             if (this.isSelecting && this.startPoint) {
-                const currentPoint = this.map.containerPointToLatLng([e.clientX, e.clientY]);
+                const rect = mapContainer.getBoundingClientRect();
+                const x = e.clientX - rect.left;
+                const y = e.clientY - rect.top;
+                const currentPoint = this.map.containerPointToLatLng([x, y]);
 
                 const bounds = L.latLngBounds(this.startPoint, currentPoint);
 

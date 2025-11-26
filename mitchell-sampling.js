@@ -70,7 +70,7 @@ class PointRelaxation {
         for (let iter = 0; iter < iterations; iter++) {
             const forces = points.map(() => ({ x: 0, y: 0 }));
 
-            // Calculate repulsive forces between all points
+            // Calculate repulsive forces between all points (including edges pushing on interior)
             for (let i = 0; i < points.length; i++) {
                 for (let j = i + 1; j < points.length; j++) {
                     const dx = points[j].x - points[i].x;
@@ -84,6 +84,7 @@ class PointRelaxation {
                     const fx = (dx / dist) * force;
                     const fy = (dy / dist) * force;
 
+                    // Both points feel the force, but only non-edge points will move
                     forces[i].x -= fx;
                     forces[i].y -= fy;
                     forces[j].x += fx;
