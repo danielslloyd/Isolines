@@ -46,6 +46,11 @@ class ContourMapApp {
 
         // Create layer for contours
         this.contourLayer = L.layerGroup().addTo(this.map);
+
+        // Invalidate map size after a short delay to ensure proper rendering
+        setTimeout(() => {
+            this.map.invalidateSize();
+        }, 100);
     }
 
     initControls() {
@@ -697,10 +702,11 @@ class ContourMapApp {
         const sw = this.selectedBounds.getSouthWest();
         const ne = this.selectedBounds.getNorthEast();
 
-        // Set canvas size
-        const canvasWidth = this.previewCanvas.width = 360;
+        // Set canvas size based on actual container size
+        const rect = this.previewCanvas.getBoundingClientRect();
+        const canvasWidth = this.previewCanvas.width = rect.width || 360;
         const aspectRatio = (ne.lat - sw.lat) / (ne.lng - sw.lng);
-        const canvasHeight = this.previewCanvas.height = canvasWidth * aspectRatio;
+        const canvasHeight = this.previewCanvas.height = Math.max(250, canvasWidth * aspectRatio);
 
         const ctx = this.previewCtx;
 
@@ -843,10 +849,11 @@ class ContourMapApp {
         const sw = this.selectedBounds.getSouthWest();
         const ne = this.selectedBounds.getNorthEast();
 
-        // Set canvas size
-        const canvasWidth = this.heatmapCanvas.width = 360;
+        // Set canvas size based on actual container size
+        const rect = this.heatmapCanvas.getBoundingClientRect();
+        const canvasWidth = this.heatmapCanvas.width = rect.width || 360;
         const aspectRatio = (ne.lat - sw.lat) / (ne.lng - sw.lng);
-        const canvasHeight = this.heatmapCanvas.height = canvasWidth * aspectRatio;
+        const canvasHeight = this.heatmapCanvas.height = Math.max(300, canvasWidth * aspectRatio);
 
         const ctx = this.heatmapCtx;
 
