@@ -296,13 +296,11 @@ class ContourMapApp {
         }
 
         // Generate interior samples using Poisson-disc sampling with better fill
-        const minDistance = Math.min(width, height) / Math.sqrt(interiorSamples) * 0.5; // Reduced from 0.8 to 0.5 for better fill
-        const poisson = new PoissonDisc(bounds, minDistance);
-        const interiorPoints = poisson.generate(interiorSamples * 2); // Generate more and take the first interiorSamples
+        const minDistance = Math.min(width, height) / Math.sqrt(interiorSamples) * 0.35; // Aggressive packing
+        const poisson = new PoissonDisc(bounds, minDistance, 50); // Increased attempts
+        const interiorPoints = poisson.generate(interiorSamples);
 
-        // Take only the required number of interior points
-        const selectedInterior = interiorPoints.slice(0, interiorSamples);
-        selectedInterior.forEach(p => {
+        interiorPoints.forEach(p => {
             points.push({ x: p.x, y: p.y, elevation: null });
         });
 
@@ -421,6 +419,180 @@ class ContourMapApp {
             this.samples.push(...newPoints);
             this.refinementPoints = newPoints; // Track for highlighting
         }
+    }
+
+    generateContourLinesFromTriangles(points, interval) {
+        // Find min and max elevations
+        let minElev = Infinity;
+        let maxElev = -Infinity;
+
+        for (const point of points) {
+            if (point.elevation !== null) {
+                minElev = Math.min(minElev, point.elevation);
+                maxElev = Math.max(maxElev, point.elevation);
+            }
+        }
+
+        // Generate contour levels
+        const levels = [];
+        const startLevel = Math.ceil(minElev / interval) * interval;
+        for (let level = startLevel; level <= maxElev; level += interval) {
+            levels.push(level);
+        }
+
+        // Build Delaunay triangulation
+        const pointsArray = points.map(p => [p.x, p.y]);
+        const elevations = points.map(p => p.elevation);
+        const delaunay = d3.Delaunay.from(pointsArray);
+        const triangles = delaunay.triangles;
+
+        // Extract contour segments for each level
+        const contourSegments = {};
+        levels.forEach(level => {
+            contourSegments[level] = [];
+        });
+
+        // Process each triangle
+        for (let i = 0; i < triangles.length; i += 3) {
+            const i0 = triangles[i];
+            const i1 = triangles[i + 1];
+            const i2 = triangles[i + 2];
+
+            const p0 = { x: pointsArray[i0][0], y: pointsArray[i0][1], z: elevations[i0] };
+            const p1 = { x: pointsArray[i1][0], y: pointsArray[i1][1], z: elevations[i1] };
+            const p2 = { x: pointsArray[i2][0], y: pointsArray[i2][1], z: elevations[i2] };
+
+            // For each contour level, check if it intersects this triangle
+            for (const level of levels) {
+                const segments = this.getTriangleContourSegments(p0, p1, p2, level);
+                if (segments.length > 0) {
+                    contourSegments[level].push(...segments);
+                }
+            }
+        }
+
+        // Connect segments into polylines
+        this.originalContours = {};
+        for (const level in contourSegments) {
+            const segments = contourSegments[level];
+            this.originalContours[level] = this.connectContourSegments(segments);
+        }
+
+        this.currentContours = JSON.parse(JSON.stringify(this.originalContours));
+    }
+
+    getTriangleContourSegments(p0, p1, p2, level) {
+        // Find where the contour level intersects the triangle edges
+        const intersections = [];
+
+        // Check edge p0-p1
+        const edge01 = this.getEdgeIntersection(p0, p1, level);
+        if (edge01) intersections.push(edge01);
+
+        // Check edge p1-p2
+        const edge12 = this.getEdgeIntersection(p1, p2, level);
+        if (edge12) intersections.push(edge12);
+
+        // Check edge p2-p0
+        const edge20 = this.getEdgeIntersection(p2, p0, level);
+        if (edge20) intersections.push(edge20);
+
+        // If we have exactly 2 intersections, create a segment
+        if (intersections.length === 2) {
+            return [{
+                start: intersections[0],
+                end: intersections[1]
+            }];
+        }
+
+        return [];
+    }
+
+    getEdgeIntersection(p0, p1, level) {
+        // Check if the level is between the two elevations
+        const minZ = Math.min(p0.z, p1.z);
+        const maxZ = Math.max(p0.z, p1.z);
+
+        if (level < minZ || level > maxZ || Math.abs(maxZ - minZ) < 1e-10) {
+            return null;
+        }
+
+        // Linear interpolation to find intersection point
+        const t = (level - p0.z) / (p1.z - p0.z);
+        return {
+            x: p0.x + t * (p1.x - p0.x),
+            y: p0.y + t * (p1.y - p0.y)
+        };
+    }
+
+    connectContourSegments(segments) {
+        if (segments.length === 0) return [];
+
+        const lines = [];
+        const used = new Set();
+        const tolerance = 1e-8;
+
+        // Helper to check if two points are close
+        const pointsEqual = (p1, p2) => {
+            return Math.abs(p1.x - p2.x) < tolerance && Math.abs(p1.y - p2.y) < tolerance;
+        };
+
+        // Try to connect segments into polylines
+        for (let i = 0; i < segments.length; i++) {
+            if (used.has(i)) continue;
+
+            const currentLine = [segments[i].start, segments[i].end];
+            used.add(i);
+
+            let extended = true;
+            while (extended) {
+                extended = false;
+
+                // Try to extend from the end
+                for (let j = 0; j < segments.length; j++) {
+                    if (used.has(j)) continue;
+
+                    const lastPoint = currentLine[currentLine.length - 1];
+
+                    if (pointsEqual(lastPoint, segments[j].start)) {
+                        currentLine.push(segments[j].end);
+                        used.add(j);
+                        extended = true;
+                        break;
+                    } else if (pointsEqual(lastPoint, segments[j].end)) {
+                        currentLine.push(segments[j].start);
+                        used.add(j);
+                        extended = true;
+                        break;
+                    }
+                }
+
+                // Try to extend from the start
+                if (!extended) {
+                    for (let j = 0; j < segments.length; j++) {
+                        if (used.has(j)) continue;
+
+                        const firstPoint = currentLine[0];
+
+                        if (pointsEqual(firstPoint, segments[j].end)) {
+                            currentLine.unshift(segments[j].start);
+                            used.add(j);
+                            extended = true;
+                            break;
+                        } else if (pointsEqual(firstPoint, segments[j].start)) {
+                            currentLine.unshift(segments[j].end);
+                            used.add(j);
+                            extended = true;
+                            break;
+                        }
+                    }
+                }
+            }
+
+            lines.push(currentLine);
+        }
+
+        return lines;
     }
 
     createGrid(points) {
@@ -775,19 +947,69 @@ class ContourMapApp {
         }
 
         // Draw interior points (approximation using Poisson-disc)
-        ctx.fillStyle = '#3498db';
-        const minDistance = Math.min(canvasWidth, canvasHeight) / Math.sqrt(interiorSamples) * 0.5;
+        const minDistance = Math.min(canvasWidth, canvasHeight) / Math.sqrt(interiorSamples) * 0.35;
 
         const canvasBounds = {
-            minX: 10,
-            maxX: canvasWidth - 10,
-            minY: 10,
-            maxY: canvasHeight - 10
+            minX: 5,
+            maxX: canvasWidth - 5,
+            minY: 5,
+            maxY: canvasHeight - 5
         };
 
-        const poisson = new PoissonDisc(canvasBounds, minDistance);
+        const poisson = new PoissonDisc(canvasBounds, minDistance, 50);
         const interiorPoints = poisson.generate(interiorSamples);
 
+        // Build Delaunay triangulation for visualization
+        const allPreviewPoints = [];
+
+        // Add edge points to triangulation
+        for (let i = 0; i < xSamples; i++) {
+            const x = (i / (xSamples - 1)) * canvasWidth;
+            allPreviewPoints.push([x, 0]);
+            allPreviewPoints.push([x, canvasHeight]);
+        }
+        for (let i = 1; i < ySamples - 1; i++) {
+            const y = (i / (ySamples - 1)) * canvasHeight;
+            allPreviewPoints.push([0, y]);
+            allPreviewPoints.push([canvasWidth, y]);
+        }
+
+        // Add interior points
+        interiorPoints.forEach(p => {
+            allPreviewPoints.push([p.x, p.y]);
+        });
+
+        // Draw Delaunay triangulation
+        const delaunay = d3.Delaunay.from(allPreviewPoints);
+        ctx.strokeStyle = 'rgba(200, 200, 200, 0.3)';
+        ctx.lineWidth = 1;
+        ctx.beginPath();
+        delaunay.render(ctx);
+        ctx.stroke();
+
+        // Draw edge points
+        ctx.fillStyle = '#e74c3c';
+        for (let i = 0; i < xSamples; i++) {
+            const x = (i / (xSamples - 1)) * canvasWidth;
+            ctx.beginPath();
+            ctx.arc(x, 0, 3, 0, Math.PI * 2);
+            ctx.fill();
+            ctx.beginPath();
+            ctx.arc(x, canvasHeight, 3, 0, Math.PI * 2);
+            ctx.fill();
+        }
+        for (let i = 1; i < ySamples - 1; i++) {
+            const y = (i / (ySamples - 1)) * canvasHeight;
+            ctx.beginPath();
+            ctx.arc(0, y, 3, 0, Math.PI * 2);
+            ctx.fill();
+            ctx.beginPath();
+            ctx.arc(canvasWidth, y, 3, 0, Math.PI * 2);
+            ctx.fill();
+        }
+
+        // Draw interior points
+        ctx.fillStyle = '#3498db';
         interiorPoints.forEach(p => {
             ctx.beginPath();
             ctx.arc(p.x, p.y, 2, 0, Math.PI * 2);
@@ -796,6 +1018,9 @@ class ContourMapApp {
 
         // Add legend
         ctx.font = '12px -apple-system, sans-serif';
+        ctx.fillStyle = 'rgba(255, 255, 255, 0.9)';
+        ctx.fillRect(8, 8, 130, 54);
+
         ctx.fillStyle = '#e74c3c';
         ctx.fillRect(10, 10, 12, 12);
         ctx.fillStyle = '#2c3e50';
@@ -803,8 +1028,16 @@ class ContourMapApp {
 
         ctx.fillStyle = '#3498db';
         ctx.fillRect(10, 30, 12, 12);
-        ctx.fillStyle = '#2c3e50';
         ctx.fillText('Interior samples', 28, 40);
+
+        ctx.strokeStyle = 'rgba(200, 200, 200, 0.5)';
+        ctx.lineWidth = 1;
+        ctx.beginPath();
+        ctx.moveTo(10, 50);
+        ctx.lineTo(22, 50);
+        ctx.stroke();
+        ctx.fillStyle = '#2c3e50';
+        ctx.fillText('Triangulation', 28, 54);
     }
 
     async lockPointsAndFetchElevations() {
@@ -955,12 +1188,9 @@ class ContourMapApp {
         btn.textContent = 'Generating contours...';
 
         try {
-            // Create grid
-            const grid = this.createGrid(this.samples);
-
-            // Generate contours
+            // Generate contours directly from triangulation
             const interval = parseFloat(document.getElementById('pane-contour-interval').value);
-            this.generateContourLines(grid, interval);
+            this.generateContourLinesFromTriangles(this.samples, interval);
 
             // Display on map
             this.displayContours();
