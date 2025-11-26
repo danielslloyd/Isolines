@@ -295,14 +295,17 @@ class ContourMapApp {
             points.push({ x: bounds.maxX, y, elevation: null });
         }
 
-        // Generate interior samples using Poisson-disc sampling with better fill
-        const minDistance = Math.min(width, height) / Math.sqrt(interiorSamples) * 0.35; // Aggressive packing
-        const poisson = new PoissonDisc(bounds, minDistance, 50); // Increased attempts
-        const interiorPoints = poisson.generate(interiorSamples);
+        // Generate interior samples using Mitchell's best-candidate algorithm
+        const mitchell = new MitchellSampling(bounds, 20); // 20 candidates per point
+        const interiorPoints = mitchell.generate(interiorSamples);
 
         interiorPoints.forEach(p => {
             points.push({ x: p.x, y: p.y, elevation: null });
         });
+
+        // Apply relaxation to push points apart (keeping edge points fixed)
+        const edgePoints = points.slice(0, points.length - interiorPoints.length);
+        PointRelaxation.relax(points, edgePoints, bounds, 10);
 
         return points;
     }
@@ -803,7 +806,11 @@ class ContourMapApp {
         this.originalContours = null;
         this.currentContours = null;
         this.samples = [];
-        document.getElementById('simplify-controls').classList.remove('show');
+        // Element no longer exists in pane workflow
+        const simplifyControls = document.getElementById('simplify-controls');
+        if (simplifyControls) {
+            simplifyControls.classList.remove('show');
+        }
     }
 
     exportSVG() {
@@ -946,9 +953,7 @@ class ContourMapApp {
             ctx.fill();
         }
 
-        // Draw interior points (approximation using Poisson-disc)
-        const minDistance = Math.min(canvasWidth, canvasHeight) / Math.sqrt(interiorSamples) * 0.35;
-
+        // Draw interior points using Mitchell's best-candidate
         const canvasBounds = {
             minX: 5,
             maxX: canvasWidth - 5,
@@ -956,28 +961,36 @@ class ContourMapApp {
             maxY: canvasHeight - 5
         };
 
-        const poisson = new PoissonDisc(canvasBounds, minDistance, 50);
-        const interiorPoints = poisson.generate(interiorSamples);
+        const mitchell = new MitchellSampling(canvasBounds, 20);
+        const interiorPoints = mitchell.generate(interiorSamples);
 
-        // Build Delaunay triangulation for visualization
-        const allPreviewPoints = [];
+        // Collect all points for relaxation
+        const allPoints = [];
 
-        // Add edge points to triangulation
+        // Add edge points
         for (let i = 0; i < xSamples; i++) {
             const x = (i / (xSamples - 1)) * canvasWidth;
-            allPreviewPoints.push([x, 0]);
-            allPreviewPoints.push([x, canvasHeight]);
+            allPoints.push({x, y: 0});
+            allPoints.push({x, y: canvasHeight});
         }
         for (let i = 1; i < ySamples - 1; i++) {
             const y = (i / (ySamples - 1)) * canvasHeight;
-            allPreviewPoints.push([0, y]);
-            allPreviewPoints.push([canvasWidth, y]);
+            allPoints.push({x: 0, y});
+            allPoints.push({x: canvasWidth, y});
         }
+
+        const edgePointsForRelaxation = allPoints.slice();
 
         // Add interior points
         interiorPoints.forEach(p => {
-            allPreviewPoints.push([p.x, p.y]);
+            allPoints.push(p);
         });
+
+        // Apply relaxation
+        PointRelaxation.relax(allPoints, edgePointsForRelaxation, canvasBounds, 10);
+
+        // Build Delaunay triangulation for visualization using relaxed points
+        const allPreviewPoints = allPoints.map(p => [p.x, p.y]);
 
         // Draw Delaunay triangulation
         const delaunay = d3.Delaunay.from(allPreviewPoints);
@@ -987,34 +1000,24 @@ class ContourMapApp {
         delaunay.render(ctx);
         ctx.stroke();
 
-        // Draw edge points
+        // Draw edge points (from relaxed points)
         ctx.fillStyle = '#e74c3c';
-        for (let i = 0; i < xSamples; i++) {
-            const x = (i / (xSamples - 1)) * canvasWidth;
+        const numEdgePoints = edgePointsForRelaxation.length;
+        for (let i = 0; i < numEdgePoints; i++) {
+            const p = allPoints[i];
             ctx.beginPath();
-            ctx.arc(x, 0, 3, 0, Math.PI * 2);
-            ctx.fill();
-            ctx.beginPath();
-            ctx.arc(x, canvasHeight, 3, 0, Math.PI * 2);
-            ctx.fill();
-        }
-        for (let i = 1; i < ySamples - 1; i++) {
-            const y = (i / (ySamples - 1)) * canvasHeight;
-            ctx.beginPath();
-            ctx.arc(0, y, 3, 0, Math.PI * 2);
-            ctx.fill();
-            ctx.beginPath();
-            ctx.arc(canvasWidth, y, 3, 0, Math.PI * 2);
+            ctx.arc(p.x, p.y, 3, 0, Math.PI * 2);
             ctx.fill();
         }
 
-        // Draw interior points
+        // Draw interior points (from relaxed points)
         ctx.fillStyle = '#3498db';
-        interiorPoints.forEach(p => {
+        for (let i = numEdgePoints; i < allPoints.length; i++) {
+            const p = allPoints[i];
             ctx.beginPath();
             ctx.arc(p.x, p.y, 2, 0, Math.PI * 2);
             ctx.fill();
-        });
+        }
 
         // Add legend
         ctx.font = '12px -apple-system, sans-serif';
@@ -1218,13 +1221,28 @@ class ContourMapApp {
         const sw = this.selectedBounds.getSouthWest();
         const ne = this.selectedBounds.getNorthEast();
 
-        // Calculate SVG dimensions (preserve aspect ratio)
-        const width = 340;
-        const aspectRatio = (ne.lat - sw.lat) / (ne.lng - sw.lng);
-        const height = width * aspectRatio;
+        // Calculate SVG dimensions to fill container while preserving aspect ratio
+        const preview = document.getElementById('svg-preview');
+        const rect = preview.getBoundingClientRect();
+        const containerWidth = rect.width || 340;
+        const containerHeight = rect.height || 400;
 
-        // Create SVG
-        let svg = `<svg width="${width}" height="${height}" viewBox="0 0 ${width} ${height}" xmlns="http://www.w3.org/2000/svg">
+        const aspectRatio = (ne.lat - sw.lat) / (ne.lng - sw.lng);
+
+        // Fit to container while maintaining aspect ratio
+        let width, height;
+        if (containerWidth / containerHeight > 1 / aspectRatio) {
+            // Container is wider than needed
+            height = containerHeight - 20;
+            width = height / aspectRatio;
+        } else {
+            // Container is taller than needed
+            width = containerWidth - 20;
+            height = width * aspectRatio;
+        }
+
+        // Create SVG that scales to fit container
+        let svg = `<svg width="100%" height="100%" viewBox="0 0 ${width} ${height}" xmlns="http://www.w3.org/2000/svg" preserveAspectRatio="xMidYMid meet" style="max-width: 100%; max-height: 100%;">
     <rect width="100%" height="100%" fill="white"/>
     <g id="contours">
 `;
@@ -1253,8 +1271,54 @@ class ContourMapApp {
             });
         }
 
-        svg += `    </g>
+        // Add visual debugging for simplification - show lowest rank points
+        const simplifyThreshold = parseFloat(document.getElementById('pane-simplify-slider').value) / 100;
+        if (simplifyThreshold > 0 && this.originalContours) {
+            svg += `    </g>
+    <g id="debug-points">
+`;
+            for (const level in this.originalContours) {
+                const originalLine = this.originalContours[level];
+                const simplifiedLine = this.currentContours[level];
+
+                originalLine.forEach(line => {
+                    if (line.length <= 2) return;
+
+                    // Calculate effective areas for all interior points
+                    const effectiveAreas = [];
+                    for (let i = 1; i < line.length - 1; i++) {
+                        const area = Math.abs(
+                            (line[i].x - line[i-1].x) * (line[i+1].y - line[i-1].y) -
+                            (line[i+1].x - line[i-1].x) * (line[i].y - line[i-1].y)
+                        ) / 2;
+                        effectiveAreas.push({ index: i, area: area, point: line[i] });
+                    }
+
+                    // Sort by area (lowest first)
+                    effectiveAreas.sort((a, b) => a.area - b.area);
+
+                    // Find max area for normalization
+                    const maxArea = effectiveAreas.length > 0 ? Math.max(...effectiveAreas.map(e => e.area)) : 1;
+
+                    // Draw markers for points with area below threshold
+                    effectiveAreas.forEach(e => {
+                        const normalizedArea = e.area / maxArea;
+                        if (normalizedArea < simplifyThreshold) {
+                            const x = ((e.point.x - sw.lng) / (ne.lng - sw.lng)) * width;
+                            const y = height - ((e.point.y - sw.lat) / (ne.lat - sw.lat)) * height;
+                            // Color indicates how close to removal (red = will be removed)
+                            const intensity = 1 - (normalizedArea / simplifyThreshold);
+                            svg += `        <circle cx="${x.toFixed(2)}" cy="${y.toFixed(2)}" r="2" fill="rgba(255, 0, 0, ${intensity.toFixed(2)})" stroke="red" stroke-width="0.5"/>\n`;
+                        }
+                    });
+                });
+            }
+            svg += `    </g>
 </svg>`;
+        } else {
+            svg += `    </g>
+</svg>`;
+        }
 
         // Display preview
         const preview = document.getElementById('svg-preview');
