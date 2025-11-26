@@ -19,6 +19,8 @@ class ContourMapApp {
         this.heatmapCanvas = null;
         this.heatmapCtx = null;
         this.refinementPoints = [];
+        this.simplificationPointRanking = [];
+        this.showTriangulation = false;
 
         this.init();
     }
@@ -91,12 +93,18 @@ class ContourMapApp {
         });
 
         // Pane 4 controls
+        const showTriangulationCheckbox = document.getElementById('show-triangulation');
+        showTriangulationCheckbox.addEventListener('change', (e) => {
+            this.showTriangulation = e.target.checked;
+            this.updateSVGPreview();
+        });
+
         const paneSimplifySlider = document.getElementById('pane-simplify-slider');
         const paneSimplifyValue = document.getElementById('pane-simplify-value');
         paneSimplifySlider.addEventListener('input', (e) => {
-            const value = e.target.value;
-            paneSimplifyValue.textContent = value + '%';
-            this.applySimplification(value / 100);
+            const removeCount = parseInt(e.target.value);
+            paneSimplifyValue.textContent = removeCount + ' points';
+            this.applySimplificationByCount(removeCount);
         });
 
         // Contour interval changes should regenerate contours
@@ -499,6 +507,51 @@ class ContourMapApp {
         }
 
         this.currentContours = JSON.parse(JSON.stringify(this.originalContours));
+
+        // Calculate simplification point ranking
+        this.calculateSimplificationRanking();
+    }
+
+    calculateSimplificationRanking() {
+        // Build a list of all removable points across all contours with their importance
+        const allRemovablePoints = [];
+
+        for (const level in this.originalContours) {
+            const lines = this.originalContours[level];
+
+            lines.forEach((line, lineIndex) => {
+                if (line.length <= 2) return;
+
+                // Calculate effective area for each interior point
+                for (let i = 1; i < line.length - 1; i++) {
+                    const area = Math.abs(
+                        (line[i].x - line[i-1].x) * (line[i+1].y - line[i-1].y) -
+                        (line[i+1].x - line[i-1].x) * (line[i].y - line[i-1].y)
+                    ) / 2;
+
+                    allRemovablePoints.push({
+                        level,
+                        lineIndex,
+                        pointIndex: i,
+                        area,
+                        point: line[i]
+                    });
+                }
+            });
+        }
+
+        // Sort by area (smallest = least important = removed first)
+        allRemovablePoints.sort((a, b) => a.area - b.area);
+
+        this.simplificationPointRanking = allRemovablePoints;
+
+        // Update slider max
+        const slider = document.getElementById('pane-simplify-slider');
+        if (slider) {
+            slider.max = allRemovablePoints.length;
+            slider.value = 0;
+            document.getElementById('pane-simplify-value').textContent = '0 points';
+        }
     }
 
     getTriangleContourSegments(p0, p1, p2, level) {
@@ -814,6 +867,54 @@ class ContourMapApp {
             this.currentContours[level] = Visvalingam.simplifyLines(lines, threshold);
         }
 
+        this.displayContours();
+        this.updateSVGPreview();
+    }
+
+    applySimplificationByCount(removeCount) {
+        if (!this.originalContours || !this.simplificationPointRanking) return;
+
+        // Start with a copy of the original contours
+        this.currentContours = JSON.parse(JSON.stringify(this.originalContours));
+
+        // Remove the first N points from the ranking (least important)
+        const pointsToRemove = this.simplificationPointRanking.slice(0, removeCount);
+
+        // Build a map of points to remove for quick lookup
+        const removalMap = {};
+        for (const removal of pointsToRemove) {
+            const key = `${removal.level}_${removal.lineIndex}`;
+            if (!removalMap[key]) {
+                removalMap[key] = new Set();
+            }
+            removalMap[key].add(removal.pointIndex);
+        }
+
+        // Remove the points from each contour line
+        for (const level in this.currentContours) {
+            const lines = this.currentContours[level];
+            const newLines = [];
+
+            lines.forEach((line, lineIndex) => {
+                const key = `${level}_${lineIndex}`;
+                const indicesToRemove = removalMap[key];
+
+                if (!indicesToRemove || indicesToRemove.size === 0) {
+                    // No removals for this line
+                    newLines.push(line);
+                } else {
+                    // Filter out the removed points
+                    const newLine = line.filter((point, idx) => !indicesToRemove.has(idx));
+                    if (newLine.length >= 2) {
+                        newLines.push(newLine);
+                    }
+                }
+            });
+
+            this.currentContours[level] = newLines;
+        }
+
+        // Update displays
         this.displayContours();
         this.updateSVGPreview();
     }
@@ -1261,7 +1362,59 @@ class ContourMapApp {
         // Create SVG that scales to fit container
         let svg = `<svg width="100%" height="100%" viewBox="0 0 ${width} ${height}" xmlns="http://www.w3.org/2000/svg" preserveAspectRatio="xMidYMid meet" style="max-width: 100%; max-height: 100%;">
     <rect width="100%" height="100%" fill="white"/>
-    <g id="contours">
+`;
+
+        // Add triangulation overlay if enabled (shown in preview only, not exported)
+        if (this.showTriangulation && this.samples && this.samples.length > 0) {
+            svg += `    <g id="triangulation-overlay">
+`;
+            // Build Delaunay triangulation from sample points
+            const pointsArray = this.samples.map(p => [p.x, p.y]);
+            const delaunay = d3.Delaunay.from(pointsArray);
+            const triangles = delaunay.triangles;
+
+            // Draw triangulation edges
+            const drawnEdges = new Set();
+            for (let i = 0; i < triangles.length; i += 3) {
+                const i0 = triangles[i];
+                const i1 = triangles[i + 1];
+                const i2 = triangles[i + 2];
+
+                // Draw each edge only once
+                const edges = [
+                    [i0, i1],
+                    [i1, i2],
+                    [i2, i0]
+                ];
+
+                edges.forEach(([a, b]) => {
+                    const key = a < b ? `${a}_${b}` : `${b}_${a}`;
+                    if (!drawnEdges.has(key)) {
+                        drawnEdges.add(key);
+
+                        const x1 = ((pointsArray[a][0] - sw.lng) / (ne.lng - sw.lng)) * width;
+                        const y1 = height - ((pointsArray[a][1] - sw.lat) / (ne.lat - sw.lat)) * height;
+                        const x2 = ((pointsArray[b][0] - sw.lng) / (ne.lng - sw.lng)) * width;
+                        const y2 = height - ((pointsArray[b][1] - sw.lat) / (ne.lat - sw.lat)) * height;
+
+                        svg += `        <line x1="${x1.toFixed(2)}" y1="${y1.toFixed(2)}" x2="${x2.toFixed(2)}" y2="${y2.toFixed(2)}" stroke="#ccc" stroke-width="0.5" opacity="0.4"/>\n`;
+                    }
+                });
+            }
+
+            // Draw sample point nodes
+            this.samples.forEach(p => {
+                const x = ((p.x - sw.lng) / (ne.lng - sw.lng)) * width;
+                const y = height - ((p.y - sw.lat) / (ne.lat - sw.lat)) * height;
+                svg += `        <circle cx="${x.toFixed(2)}" cy="${y.toFixed(2)}" r="1.5" fill="#999" opacity="0.5"/>\n`;
+            });
+
+            svg += `    </g>
+`;
+        }
+
+        // Add contour lines
+        svg += `    <g id="contours">
 `;
 
         const levels = Object.keys(this.currentContours).map(Number).sort((a, b) => a - b);
@@ -1288,54 +1441,8 @@ class ContourMapApp {
             });
         }
 
-        // Add visual debugging for simplification - show lowest rank points
-        const simplifyThreshold = parseFloat(document.getElementById('pane-simplify-slider').value) / 100;
-        if (simplifyThreshold > 0 && this.originalContours) {
-            svg += `    </g>
-    <g id="debug-points">
-`;
-            for (const level in this.originalContours) {
-                const originalLine = this.originalContours[level];
-                const simplifiedLine = this.currentContours[level];
-
-                originalLine.forEach(line => {
-                    if (line.length <= 2) return;
-
-                    // Calculate effective areas for all interior points
-                    const effectiveAreas = [];
-                    for (let i = 1; i < line.length - 1; i++) {
-                        const area = Math.abs(
-                            (line[i].x - line[i-1].x) * (line[i+1].y - line[i-1].y) -
-                            (line[i+1].x - line[i-1].x) * (line[i].y - line[i-1].y)
-                        ) / 2;
-                        effectiveAreas.push({ index: i, area: area, point: line[i] });
-                    }
-
-                    // Sort by area (lowest first)
-                    effectiveAreas.sort((a, b) => a.area - b.area);
-
-                    // Find max area for normalization
-                    const maxArea = effectiveAreas.length > 0 ? Math.max(...effectiveAreas.map(e => e.area)) : 1;
-
-                    // Draw markers for points with area below threshold
-                    effectiveAreas.forEach(e => {
-                        const normalizedArea = e.area / maxArea;
-                        if (normalizedArea < simplifyThreshold) {
-                            const x = ((e.point.x - sw.lng) / (ne.lng - sw.lng)) * width;
-                            const y = height - ((e.point.y - sw.lat) / (ne.lat - sw.lat)) * height;
-                            // Color indicates how close to removal (red = will be removed)
-                            const intensity = 1 - (normalizedArea / simplifyThreshold);
-                            svg += `        <circle cx="${x.toFixed(2)}" cy="${y.toFixed(2)}" r="2" fill="rgba(255, 0, 0, ${intensity.toFixed(2)})" stroke="red" stroke-width="0.5"/>\n`;
-                        }
-                    });
-                });
-            }
-            svg += `    </g>
+        svg += `    </g>
 </svg>`;
-        } else {
-            svg += `    </g>
-</svg>`;
-        }
 
         // Display preview
         preview.innerHTML = svg;

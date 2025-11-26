@@ -65,12 +65,13 @@ class MitchellSampling {
  */
 class PointRelaxation {
     static relax(points, edgePoints, bounds, iterations = 5) {
-        const edgeSet = new Set(edgePoints.map(p => `${p.x},${p.y}`));
+        const edgeSet = new Set(edgePoints.map(p => `${p.x.toFixed(10)},${p.y.toFixed(10)}`));
 
         for (let iter = 0; iter < iterations; iter++) {
             const forces = points.map(() => ({ x: 0, y: 0 }));
 
-            // Calculate repulsive forces between all points (including edges pushing on interior)
+            // Calculate repulsive forces between all points
+            // Edge points participate in force calculations but don't move
             for (let i = 0; i < points.length; i++) {
                 for (let j = i + 1; j < points.length; j++) {
                     const dx = points[j].x - points[i].x;
@@ -79,12 +80,11 @@ class PointRelaxation {
 
                     if (dist < 1e-10) continue;
 
-                    // Repulsive force inversely proportional to distance
-                    const force = 0.01 / (dist * dist);
+                    // Stronger repulsive force with wider range
+                    const force = 0.05 / (dist * dist);
                     const fx = (dx / dist) * force;
                     const fy = (dy / dist) * force;
 
-                    // Both points feel the force, but only non-edge points will move
                     forces[i].x -= fx;
                     forces[i].y -= fy;
                     forces[j].x += fx;
@@ -92,9 +92,9 @@ class PointRelaxation {
                 }
             }
 
-            // Apply forces (but not to edge points)
+            // Apply forces only to non-edge points
             for (let i = 0; i < points.length; i++) {
-                const key = `${points[i].x},${points[i].y}`;
+                const key = `${points[i].x.toFixed(10)},${points[i].y.toFixed(10)}`;
                 if (!edgeSet.has(key)) {
                     points[i].x += forces[i].x;
                     points[i].y += forces[i].y;
