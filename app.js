@@ -1321,7 +1321,6 @@ class ContourMapApp {
         }
 
         // Display preview
-        const preview = document.getElementById('svg-preview');
         preview.innerHTML = svg;
     }
 
