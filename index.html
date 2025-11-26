@@ -38,33 +38,16 @@
             overflow: hidden;
         }
 
-        #map {
+        #panes-wrapper {
             flex: 1;
             position: relative;
+            overflow: hidden;
         }
 
-        #controls {
-            width: 350px;
-            background: white;
-            padding: 20px;
-            overflow-y: auto;
-            box-shadow: -2px 0 4px rgba(0,0,0,0.1);
-        }
-
-        .control-section {
-            margin-bottom: 25px;
-            padding-bottom: 20px;
-            border-bottom: 1px solid #e0e0e0;
-        }
-
-        .control-section:last-child {
-            border-bottom: none;
-        }
-
-        .control-section h3 {
-            font-size: 16px;
-            margin-bottom: 12px;
-            color: #2c3e50;
+        #map {
+            width: 100%;
+            height: 100%;
+            position: relative;
         }
 
         .control-group {
@@ -98,60 +81,6 @@
             color: #2c3e50;
         }
 
-        button {
-            width: 100%;
-            padding: 12px;
-            background: #3498db;
-            color: white;
-            border: none;
-            border-radius: 4px;
-            font-size: 14px;
-            font-weight: 600;
-            cursor: pointer;
-            transition: background 0.2s;
-        }
-
-        button:hover {
-            background: #2980b9;
-        }
-
-        button:disabled {
-            background: #bdc3c7;
-            cursor: not-allowed;
-        }
-
-        button.secondary {
-            background: #95a5a6;
-        }
-
-        button.secondary:hover {
-            background: #7f8c8d;
-        }
-
-        #status {
-            margin-top: 15px;
-            padding: 10px;
-            background: #ecf0f1;
-            border-radius: 4px;
-            font-size: 13px;
-            color: #2c3e50;
-            display: none;
-        }
-
-        #status.show {
-            display: block;
-        }
-
-        #status.error {
-            background: #e74c3c;
-            color: white;
-        }
-
-        #status.success {
-            background: #2ecc71;
-            color: white;
-        }
-
         .info-box {
             background: #e8f4f8;
             padding: 10px;
@@ -175,27 +104,28 @@
             border-left: 4px solid #ffc107;
         }
 
-        #simplify-controls {
-            display: none;
-        }
-
-        #simplify-controls.show {
-            display: block;
-        }
-
         /* Collapsible Panes */
         #panes-container {
             position: absolute;
             left: 0;
             top: 0;
             bottom: 0;
-            width: 400px;
+            right: 0;
+            width: 100%;
             display: flex;
             flex-direction: column;
-            background: rgba(255, 255, 255, 0.95);
-            box-shadow: 2px 0 8px rgba(0,0,0,0.15);
+            background: white;
             z-index: 1000;
-            overflow: hidden;
+            overflow-y: auto;
+        }
+
+        .map-container {
+            width: 100%;
+            height: 500px;
+            border: 2px solid #ddd;
+            border-radius: 4px;
+            margin: 10px 0;
+            position: relative;
         }
 
         .workflow-pane {
@@ -328,7 +258,7 @@
     </div>
 
     <div id="main-container">
-        <div id="map">
+        <div id="panes-wrapper">
             <div id="panes-container">
                 <!-- Pane 1: Select Area -->
                 <div class="workflow-pane" data-pane="1">
@@ -341,6 +271,7 @@
                             <div class="instruction">
                                 Right-click and drag on the map to select an area for contour generation.
                             </div>
+                            <div class="map-container" id="map"></div>
                             <div class="control-group">
                                 <label>Selected Bounds:</label>
                                 <div class="info-box" id="pane-bounds-info">No area selected</div>
@@ -358,12 +289,11 @@
                     <div class="pane-content">
                         <div class="pane-content-inner">
                             <div class="control-group">
-                                <label>Total Edge Samples (N):</label>
-                                <input type="number" id="pane-edge-samples" value="100" min="20" max="500" step="10">
-                            </div>
-                            <div class="control-group">
-                                <label>Interior Samples (Poisson-disc):</label>
-                                <input type="number" id="pane-interior-samples" value="100" min="20" max="1000" step="10">
+                                <label>Total Sample Points:</label>
+                                <input type="number" id="pane-total-samples" value="200" min="50" max="1000" step="50">
+                                <small style="color: #666; display: block; margin-top: 5px;">
+                                    25% will be placed on edges, 75% in the interior
+                                </small>
                             </div>
                             <canvas id="preview-canvas" class="preview-canvas"></canvas>
                             <button class="pane-button" id="lock-points-btn">Lock Points & Get Elevations</button>
@@ -409,64 +339,10 @@
                 </div>
             </div>
         </div>
-
-        <div id="controls">
-            <div class="control-section">
-                <div class="instruction">
-                    Right-click and drag on the map to select an area for contour generation.
-                </div>
-
-                <div class="control-group">
-                    <label>Selected Bounds:</label>
-                    <div class="info-box" id="bounds-info">No area selected</div>
-                </div>
-            </div>
-
-            <div class="control-section">
-                <h3>Sampling Parameters</h3>
-
-                <div class="control-group">
-                    <label>Total Edge Samples (N):</label>
-                    <input type="number" id="edge-samples" value="100" min="20" max="500" step="10">
-                </div>
-
-                <div class="control-group">
-                    <label>Interior Samples (Poisson-disc):</label>
-                    <input type="number" id="interior-samples" value="100" min="20" max="1000" step="10">
-                </div>
-            </div>
-
-            <div class="control-section">
-                <h3>Contour Parameters</h3>
-
-                <div class="control-group">
-                    <label>Contour Interval (meters):</label>
-                    <input type="number" id="contour-interval" value="10" min="1" max="100" step="1">
-                </div>
-
-                <div class="control-group">
-                    <button id="generate-btn">Generate Contours</button>
-                </div>
-            </div>
-
-            <div class="control-section" id="simplify-controls">
-                <h3>Simplification</h3>
-
-                <div class="control-group">
-                    <label>Simplification: <span class="range-value" id="simplify-value">0%</span></label>
-                    <input type="range" id="simplify-slider" min="0" max="100" value="0" step="1">
-                </div>
-
-                <div class="control-group">
-                    <button id="export-btn" class="secondary">Export SVG</button>
-                </div>
-            </div>
-
-            <div id="status"></div>
-        </div>
     </div>
 
     <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+    <script src="https://unpkg.com/d3-delaunay@6"></script>
     <script src="poisson-disc.js"></script>
     <script src="conrec.js"></script>
     <script src="visvalingam.js"></script>
