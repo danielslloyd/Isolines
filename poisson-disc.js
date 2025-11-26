@@ -21,12 +21,24 @@ class PoissonDisc {
     }
 
     generate(targetCount) {
-        // Start with a random point in the center area
-        const x = this.bounds.minX + this.width * (0.3 + Math.random() * 0.4);
-        const y = this.bounds.minY + this.height * (0.3 + Math.random() * 0.4);
-        const firstPoint = {x, y};
+        // Start with multiple seed points for better distribution
+        const seedPoints = [
+            // Center
+            {x: this.bounds.minX + this.width * 0.5, y: this.bounds.minY + this.height * 0.5},
+            // Corners (slightly inset)
+            {x: this.bounds.minX + this.width * 0.2, y: this.bounds.minY + this.height * 0.2},
+            {x: this.bounds.minX + this.width * 0.8, y: this.bounds.minY + this.height * 0.2},
+            {x: this.bounds.minX + this.width * 0.2, y: this.bounds.minY + this.height * 0.8},
+            {x: this.bounds.minX + this.width * 0.8, y: this.bounds.minY + this.height * 0.8}
+        ];
 
-        this.addPoint(firstPoint);
+        // Add seed points
+        for (const seedPoint of seedPoints) {
+            if (this.isValid(seedPoint.x, seedPoint.y)) {
+                this.addPoint(seedPoint);
+                if (this.points.length >= targetCount) break;
+            }
+        }
 
         while (this.active.length > 0 && this.points.length < targetCount) {
             const randomIndex = Math.floor(Math.random() * this.active.length);
