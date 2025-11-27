@@ -42,10 +42,11 @@ class ContourMapApp {
             zoomControl: true
         });
 
-        // Add Esri World Imagery tile layer
+        // Add Esri World Imagery tile layer with CORS support
         L.tileLayer('https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}', {
             attribution: 'Leaflet | Powered by Esri | Earthstar Geographics',
-            maxZoom: 18
+            maxZoom: 18,
+            crossOrigin: 'anonymous'
         }).addTo(this.map);
 
         // Create layer for contours
@@ -276,50 +277,74 @@ class ContourMapApp {
     }
 
     captureMapSnapshot() {
-        // Use leaflet-simple-map-screenshoter or capture manually
-        // For simplicity, we'll use html2canvas approach via map container
-        // Get the map container's tile layers
-        const mapContainer = this.map.getContainer();
+        try {
+            // Get the map container's tile layers
+            const mapContainer = this.map.getContainer();
 
-        // Create a temporary canvas to capture the map view
-        const canvas = document.createElement('canvas');
-        const bounds = this.selectedBounds;
-        const sw = bounds.getSouthWest();
-        const ne = bounds.getNorthEast();
+            // Create a temporary canvas to capture the map view
+            const canvas = document.createElement('canvas');
+            const bounds = this.selectedBounds;
+            const sw = bounds.getSouthWest();
+            const ne = bounds.getNorthEast();
 
-        // Get pixel coordinates for the bounds
-        const swPoint = this.map.latLngToContainerPoint(sw);
-        const nePoint = this.map.latLngToContainerPoint(ne);
+            // Get pixel coordinates for the bounds
+            const swPoint = this.map.latLngToContainerPoint(sw);
+            const nePoint = this.map.latLngToContainerPoint(ne);
 
-        const width = Math.abs(nePoint.x - swPoint.x);
-        const height = Math.abs(swPoint.y - nePoint.y);
+            const width = Math.abs(nePoint.x - swPoint.x);
+            const height = Math.abs(swPoint.y - nePoint.y);
 
-        canvas.width = width;
-        canvas.height = height;
-        const ctx = canvas.getContext('2d');
+            canvas.width = width;
+            canvas.height = height;
+            const ctx = canvas.getContext('2d');
 
-        // Get all tile layers
-        const tiles = mapContainer.querySelectorAll('.leaflet-tile-pane img');
+            // Get all tile layers
+            const tiles = mapContainer.querySelectorAll('.leaflet-tile-pane img');
 
-        // Draw tiles onto canvas
-        tiles.forEach(tile => {
-            if (tile.complete && tile.naturalHeight !== 0) {
-                const tileRect = tile.getBoundingClientRect();
-                const mapRect = mapContainer.getBoundingClientRect();
+            // Draw tiles onto canvas
+            let drawnAny = false;
+            tiles.forEach(tile => {
+                if (tile.complete && tile.naturalHeight !== 0) {
+                    const tileRect = tile.getBoundingClientRect();
+                    const mapRect = mapContainer.getBoundingClientRect();
 
-                const x = tileRect.left - mapRect.left - Math.min(swPoint.x, nePoint.x);
-                const y = tileRect.top - mapRect.top - Math.min(nePoint.y, swPoint.y);
+                    const x = tileRect.left - mapRect.left - Math.min(swPoint.x, nePoint.x);
+                    const y = tileRect.top - mapRect.top - Math.min(nePoint.y, swPoint.y);
 
-                try {
-                    ctx.drawImage(tile, x, y);
-                } catch (e) {
-                    console.warn('Could not draw tile:', e);
+                    try {
+                        ctx.drawImage(tile, x, y);
+                        drawnAny = true;
+                    } catch (e) {
+                        console.warn('Could not draw tile:', e);
+                    }
+                }
+            });
+
+            // Convert to data URL - this will fail if canvas is tainted
+            if (drawnAny) {
+                this.mapSnapshotDataURL = canvas.toDataURL('image/png');
+                console.log('Map snapshot captured successfully');
+            } else {
+                console.warn('No tiles were drawn to canvas');
+                this.mapSnapshotDataURL = null;
+            }
+        } catch (e) {
+            console.error('Failed to capture map snapshot:', e.message);
+            console.warn('Map snapshot feature disabled due to CORS restrictions. The tile server does not support cross-origin canvas access.');
+            this.mapSnapshotDataURL = null;
+
+            // Disable the checkbox since it won't work
+            const checkbox = document.getElementById('show-map-snapshot');
+            if (checkbox) {
+                checkbox.disabled = true;
+                checkbox.checked = false;
+                const label = checkbox.parentElement;
+                if (label) {
+                    label.title = 'Map snapshot unavailable due to CORS restrictions';
+                    label.style.opacity = '0.5';
                 }
             }
-        });
-
-        // Convert to data URL
-        this.mapSnapshotDataURL = canvas.toDataURL('image/png');
+        }
     }
 
     // Legacy method - no longer used with pane workflow
