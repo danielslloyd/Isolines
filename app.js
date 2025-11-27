@@ -21,6 +21,8 @@ class ContourMapApp {
         this.refinementPoints = [];
         this.simplificationPointRanking = [];
         this.showTriangulation = false;
+        this.showMapSnapshot = false;
+        this.mapSnapshotDataURL = null;
 
         this.init();
     }
@@ -93,6 +95,12 @@ class ContourMapApp {
         });
 
         // Pane 4 controls
+        const showMapSnapshotCheckbox = document.getElementById('show-map-snapshot');
+        showMapSnapshotCheckbox.addEventListener('change', (e) => {
+            this.showMapSnapshot = e.target.checked;
+            this.updateSVGPreview();
+        });
+
         const showTriangulationCheckbox = document.getElementById('show-triangulation');
         showTriangulationCheckbox.addEventListener('change', (e) => {
             this.showTriangulation = e.target.checked;
@@ -232,6 +240,9 @@ class ContourMapApp {
                     this.selectedBounds = this.selectionRectangle.getBounds();
                     this.updateBoundsDisplay();
 
+                    // Capture map snapshot after bounds are selected
+                    this.captureMapSnapshot();
+
                     // Complete pane 1 and open pane 2
                     this.completePane(1);
                     this.activatePane(2);
@@ -262,6 +273,53 @@ class ContourMapApp {
         } else {
             if (paneInfo) paneInfo.textContent = 'No area selected';
         }
+    }
+
+    captureMapSnapshot() {
+        // Use leaflet-simple-map-screenshoter or capture manually
+        // For simplicity, we'll use html2canvas approach via map container
+        // Get the map container's tile layers
+        const mapContainer = this.map.getContainer();
+
+        // Create a temporary canvas to capture the map view
+        const canvas = document.createElement('canvas');
+        const bounds = this.selectedBounds;
+        const sw = bounds.getSouthWest();
+        const ne = bounds.getNorthEast();
+
+        // Get pixel coordinates for the bounds
+        const swPoint = this.map.latLngToContainerPoint(sw);
+        const nePoint = this.map.latLngToContainerPoint(ne);
+
+        const width = Math.abs(nePoint.x - swPoint.x);
+        const height = Math.abs(swPoint.y - nePoint.y);
+
+        canvas.width = width;
+        canvas.height = height;
+        const ctx = canvas.getContext('2d');
+
+        // Get all tile layers
+        const tiles = mapContainer.querySelectorAll('.leaflet-tile-pane img');
+
+        // Draw tiles onto canvas
+        tiles.forEach(tile => {
+            if (tile.complete && tile.naturalHeight !== 0) {
+                const tileRect = tile.getBoundingClientRect();
+                const mapRect = mapContainer.getBoundingClientRect();
+
+                const x = tileRect.left - mapRect.left - Math.min(swPoint.x, nePoint.x);
+                const y = tileRect.top - mapRect.top - Math.min(nePoint.y, swPoint.y);
+
+                try {
+                    ctx.drawImage(tile, x, y);
+                } catch (e) {
+                    console.warn('Could not draw tile:', e);
+                }
+            }
+        });
+
+        // Convert to data URL
+        this.mapSnapshotDataURL = canvas.toDataURL('image/png');
     }
 
     // Legacy method - no longer used with pane workflow
@@ -332,7 +390,86 @@ class ContourMapApp {
         const edgePoints = points.slice(0, points.length - interiorPoints.length);
         PointRelaxation.relax(points, edgePoints, bounds, 10);
 
-        return points;
+        // Deduplicate points based on median edge length
+        const deduplicatedPoints = this.deduplicatePoints(points, edgePoints.length);
+
+        return deduplicatedPoints;
+    }
+
+    deduplicatePoints(points, numBoundaryPoints) {
+        // Build Delaunay triangulation to get edge lengths
+        const pointsArray = points.map(p => [p.x, p.y]);
+        const delaunay = d3.Delaunay.from(pointsArray);
+
+        // Calculate all edge lengths from triangulation
+        const edgeLengths = [];
+        const triangles = delaunay.triangles;
+        const edgeSet = new Set();
+
+        for (let i = 0; i < triangles.length; i += 3) {
+            const i0 = triangles[i];
+            const i1 = triangles[i + 1];
+            const i2 = triangles[i + 2];
+
+            // Add each edge
+            const edges = [
+                [i0, i1],
+                [i1, i2],
+                [i2, i0]
+            ];
+
+            edges.forEach(([a, b]) => {
+                const key = a < b ? `${a}_${b}` : `${b}_${a}`;
+                if (!edgeSet.has(key)) {
+                    edgeSet.add(key);
+                    const dx = pointsArray[a][0] - pointsArray[b][0];
+                    const dy = pointsArray[a][1] - pointsArray[b][1];
+                    const length = Math.sqrt(dx * dx + dy * dy);
+                    edgeLengths.push(length);
+                }
+            });
+        }
+
+        // Calculate median edge length
+        edgeLengths.sort((a, b) => a - b);
+        const median = edgeLengths[Math.floor(edgeLengths.length / 2)];
+        const threshold = 0.25 * median;
+
+        // Mark points for removal (never remove boundary points)
+        const keep = new Array(points.length).fill(true);
+
+        // Start checking from after the boundary points
+        for (let i = numBoundaryPoints; i < points.length; i++) {
+            if (!keep[i]) continue;
+
+            // Check distance to all previous kept points
+            for (let j = 0; j < i; j++) {
+                if (!keep[j]) continue;
+
+                const dx = points[i].x - points[j].x;
+                const dy = points[i].y - points[j].y;
+                const dist = Math.sqrt(dx * dx + dy * dy);
+
+                if (dist < threshold) {
+                    // Remove the later point (i), never remove boundary points
+                    if (i >= numBoundaryPoints) {
+                        keep[i] = false;
+                        break;
+                    }
+                }
+            }
+        }
+
+        // Build deduplicated array
+        const deduplicated = [];
+        for (let i = 0; i < points.length; i++) {
+            if (keep[i]) {
+                deduplicated.push(points[i]);
+            }
+        }
+
+        console.log(`Deduplicated: ${points.length} -> ${deduplicated.length} points (threshold: ${threshold.toFixed(8)})`);
+        return deduplicated;
     }
 
     async fetchElevations(points) {
@@ -877,34 +1014,50 @@ class ContourMapApp {
         // Start with a copy of the original contours
         this.currentContours = JSON.parse(JSON.stringify(this.originalContours));
 
-        // Remove the first N points from the ranking (least important)
+        // Process points in order of importance (smallest area first)
+        // Skip points whose removal would create line crossings
         const pointsToRemove = this.simplificationPointRanking.slice(0, removeCount);
 
         // Build a map of points to remove for quick lookup
+        // Track which points should actually be removed after crossing checks
         const removalMap = {};
+
         for (const removal of pointsToRemove) {
             const key = `${removal.level}_${removal.lineIndex}`;
+            const line = this.currentContours[removal.level][removal.lineIndex];
+
+            // Build a "keep" array for this line
             if (!removalMap[key]) {
-                removalMap[key] = new Set();
+                removalMap[key] = {
+                    line: line,
+                    keep: new Array(line.length).fill(true)
+                };
             }
-            removalMap[key].add(removal.pointIndex);
+
+            const lineData = removalMap[key];
+
+            // Check if removing this point would create an intersection
+            if (!this.wouldCreateIntersection(lineData.line, lineData.keep, removal.pointIndex)) {
+                lineData.keep[removal.pointIndex] = false;
+            }
+            // If it would create an intersection, skip this point (keep it)
         }
 
-        // Remove the points from each contour line
+        // Apply the removals
         for (const level in this.currentContours) {
             const lines = this.currentContours[level];
             const newLines = [];
 
             lines.forEach((line, lineIndex) => {
                 const key = `${level}_${lineIndex}`;
-                const indicesToRemove = removalMap[key];
+                const lineData = removalMap[key];
 
-                if (!indicesToRemove || indicesToRemove.size === 0) {
+                if (!lineData) {
                     // No removals for this line
                     newLines.push(line);
                 } else {
                     // Filter out the removed points
-                    const newLine = line.filter((point, idx) => !indicesToRemove.has(idx));
+                    const newLine = line.filter((point, idx) => lineData.keep[idx]);
                     if (newLine.length >= 2) {
                         newLines.push(newLine);
                     }
@@ -917,6 +1070,94 @@ class ContourMapApp {
         // Update displays
         this.displayContours();
         this.updateSVGPreview();
+    }
+
+    // Check if removing a point would create an intersection (from Visvalingam algorithm)
+    wouldCreateIntersection(points, keep, removeIndex) {
+        // Find previous and next kept points
+        let prevIndex = removeIndex - 1;
+        while (prevIndex >= 0 && !keep[prevIndex]) {
+            prevIndex--;
+        }
+
+        let nextIndex = removeIndex + 1;
+        while (nextIndex < points.length && !keep[nextIndex]) {
+            nextIndex++;
+        }
+
+        if (prevIndex < 0 || nextIndex >= points.length) {
+            return false;
+        }
+
+        const newSegment = {
+            p1: points[prevIndex],
+            p2: points[nextIndex]
+        };
+
+        // Check against all other segments
+        for (let i = 0; i < points.length - 1; i++) {
+            if (!keep[i]) continue;
+
+            let j = i + 1;
+            while (j < points.length && !keep[j]) {
+                j++;
+            }
+
+            if (j >= points.length) break;
+
+            // Skip if this segment is adjacent to the new segment
+            if (i === prevIndex || j === nextIndex || i === removeIndex || j === removeIndex) {
+                continue;
+            }
+
+            const existingSegment = {
+                p1: points[i],
+                p2: points[j]
+            };
+
+            if (this.segmentsIntersect(newSegment, existingSegment)) {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    // Check if two line segments intersect
+    segmentsIntersect(seg1, seg2) {
+        const p1 = seg1.p1;
+        const p2 = seg1.p2;
+        const p3 = seg2.p1;
+        const p4 = seg2.p2;
+
+        const d1 = this.direction(p3, p4, p1);
+        const d2 = this.direction(p3, p4, p2);
+        const d3 = this.direction(p1, p2, p3);
+        const d4 = this.direction(p1, p2, p4);
+
+        if (((d1 > 0 && d2 < 0) || (d1 < 0 && d2 > 0)) &&
+            ((d3 > 0 && d4 < 0) || (d3 < 0 && d4 > 0))) {
+            return true;
+        }
+
+        // Check for collinear cases
+        if (d1 === 0 && this.onSegment(p3, p1, p4)) return true;
+        if (d2 === 0 && this.onSegment(p3, p2, p4)) return true;
+        if (d3 === 0 && this.onSegment(p1, p3, p2)) return true;
+        if (d4 === 0 && this.onSegment(p1, p4, p2)) return true;
+
+        return false;
+    }
+
+    // Calculate direction of point p3 relative to line p1-p2
+    direction(p1, p2, p3) {
+        return (p3.x - p1.x) * (p2.y - p1.y) - (p2.x - p1.x) * (p3.y - p1.y);
+    }
+
+    // Check if point p2 is on segment p1-p3
+    onSegment(p1, p2, p3) {
+        return p2.x >= Math.min(p1.x, p3.x) && p2.x <= Math.max(p1.x, p3.x) &&
+               p2.y >= Math.min(p1.y, p3.y) && p2.y <= Math.max(p1.y, p3.y);
     }
 
     clearContours() {
@@ -949,7 +1190,14 @@ class ContourMapApp {
         let svg = `<?xml version="1.0" encoding="UTF-8"?>
 <svg width="${width}" height="${height}" xmlns="http://www.w3.org/2000/svg">
     <rect width="100%" height="100%" fill="white"/>
-    <g id="contours">
+`;
+
+        // Add map snapshot as background layer if enabled
+        if (this.showMapSnapshot && this.mapSnapshotDataURL) {
+            svg += `    <image href="${this.mapSnapshotDataURL}" x="0" y="0" width="${width}" height="${height}" opacity="0.5" preserveAspectRatio="none"/>\n`;
+        }
+
+        svg += `    <g id="contours">
 `;
 
         const levels = Object.keys(this.currentContours).map(Number).sort((a, b) => a - b);
@@ -1364,6 +1612,13 @@ class ContourMapApp {
     <rect width="100%" height="100%" fill="white"/>
 `;
 
+        // Add map snapshot as background layer if enabled
+        if (this.showMapSnapshot && this.mapSnapshotDataURL) {
+            svg += `    <image href="${this.mapSnapshotDataURL}" x="0" y="0" width="${width}" height="${height}" opacity="0.5" preserveAspectRatio="none"/>\n`;
+        }
+
+        svg += ``;
+
         // Add triangulation overlay if enabled (shown in preview only, not exported)
         if (this.showTriangulation && this.samples && this.samples.length > 0) {
             svg += `    <g id="triangulation-overlay">
@@ -1411,6 +1666,46 @@ class ContourMapApp {
 
             svg += `    </g>
 `;
+        }
+
+        // Add simplification preview (show smallest triangles being removed in red)
+        if (this.simplificationPointRanking && this.simplificationPointRanking.length > 0) {
+            const slider = document.getElementById('pane-simplify-slider');
+            const removeCount = slider ? parseInt(slider.value) : 0;
+
+            if (removeCount > 0) {
+                svg += `    <g id="simplification-preview">
+`;
+                // Get the points being removed (smallest triangles)
+                const pointsBeingRemoved = this.simplificationPointRanking.slice(0, removeCount);
+
+                // Draw triangles for these points
+                pointsBeingRemoved.forEach(removal => {
+                    const line = this.originalContours[removal.level][removal.lineIndex];
+                    if (!line || removal.pointIndex >= line.length) return;
+
+                    const prevIdx = removal.pointIndex - 1;
+                    const nextIdx = removal.pointIndex + 1;
+
+                    if (prevIdx >= 0 && nextIdx < line.length) {
+                        const p1 = line[prevIdx];
+                        const p2 = line[removal.pointIndex];
+                        const p3 = line[nextIdx];
+
+                        const x1 = ((p1.x - sw.lng) / (ne.lng - sw.lng)) * width;
+                        const y1 = height - ((p1.y - sw.lat) / (ne.lat - sw.lat)) * height;
+                        const x2 = ((p2.x - sw.lng) / (ne.lng - sw.lng)) * width;
+                        const y2 = height - ((p2.y - sw.lat) / (ne.lat - sw.lat)) * height;
+                        const x3 = ((p3.x - sw.lng) / (ne.lng - sw.lng)) * width;
+                        const y3 = height - ((p3.y - sw.lat) / (ne.lat - sw.lat)) * height;
+
+                        svg += `        <polygon points="${x1.toFixed(2)},${y1.toFixed(2)} ${x2.toFixed(2)},${y2.toFixed(2)} ${x3.toFixed(2)},${y3.toFixed(2)}" fill="red" opacity="0.5" stroke="none"/>\n`;
+                    }
+                });
+
+                svg += `    </g>
+`;
+            }
         }
 
         // Add contour lines
