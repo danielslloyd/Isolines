@@ -25,6 +25,7 @@ class ContourMapApp {
         this.mapSnapshotDataURL = null;
         this.shortEdges = [];
         this.medianEdgeLength = 0;
+        this.numBoundaryPoints = 0;
 
         this.init();
     }
@@ -414,8 +415,12 @@ class ContourMapApp {
         });
 
         // Apply relaxation to push points apart (keeping edge points fixed)
-        const edgePoints = points.slice(0, points.length - interiorPoints.length);
+        const numBoundaryPoints = points.length - interiorPoints.length;
+        const edgePoints = points.slice(0, numBoundaryPoints);
         PointRelaxation.relax(points, edgePoints, bounds, 10);
+
+        // Store boundary point count for later use
+        this.numBoundaryPoints = numBoundaryPoints;
 
         // Calculate short edges for visualization (don't delete points)
         this.calculateShortEdges(points);
@@ -1296,22 +1301,34 @@ class ContourMapApp {
         const sw = this.selectedBounds.getSouthWest();
         const ne = this.selectedBounds.getNorthEast();
 
-        // Set canvas size based on actual container size
+        // Set canvas size to fit within visible pane area
+        const pane = this.previewCanvas.closest('.pane-content-inner');
+        const paneRect = pane ? pane.getBoundingClientRect() : null;
         const rect = this.previewCanvas.getBoundingClientRect();
+
         const containerWidth = rect.width || 360;
-        const containerHeight = rect.height || 400;
+        // Calculate available height: pane height minus other elements (controls, margins, etc.)
+        const availableHeight = paneRect ? Math.max(200, paneRect.height - 150) : 400;
         const aspectRatio = (ne.lat - sw.lat) / (ne.lng - sw.lng);
 
-        // Fit canvas to container while preserving aspect ratio
+        // Fit canvas to available space while preserving aspect ratio
         let canvasWidth, canvasHeight;
-        if (containerWidth / containerHeight > 1 / aspectRatio) {
+        const containerAspectRatio = containerWidth / availableHeight;
+        const mapAspectRatio = 1 / aspectRatio; // inverse because lat/lng
+
+        if (containerAspectRatio > mapAspectRatio) {
             // Container is wider - fit to height
-            canvasHeight = Math.min(containerHeight - 20, 400);
+            canvasHeight = availableHeight;
             canvasWidth = canvasHeight / aspectRatio;
         } else {
-            // Container is taller or square - fit to width
-            canvasWidth = containerWidth;
+            // Container is taller - fit to width
+            canvasWidth = containerWidth - 20;
             canvasHeight = canvasWidth * aspectRatio;
+            // Ensure it doesn't exceed available height
+            if (canvasHeight > availableHeight) {
+                canvasHeight = availableHeight;
+                canvasWidth = canvasHeight / aspectRatio;
+            }
         }
 
         this.previewCanvas.width = canvasWidth;
@@ -1515,17 +1532,15 @@ class ContourMapApp {
         try {
             // Generate sample points
             const totalSamples = parseInt(document.getElementById('pane-total-samples').value);
-            const edgeSamples = Math.round(totalSamples * 0.25);
-            const numBoundaryPoints = edgeSamples * 4; // Approximate
 
             this.samples = this.generateSamplePoints(totalSamples);
 
             console.log(`Generated ${this.samples.length} total sample points`);
-            console.log(`  - ~${numBoundaryPoints} boundary points`);
-            console.log(`  - ~${this.samples.length - numBoundaryPoints} interior points`);
+            console.log(`  - ${this.numBoundaryPoints} boundary points`);
+            console.log(`  - ${this.samples.length - this.numBoundaryPoints} interior points`);
 
             // Fetch elevations
-            await this.fetchElevations(this.samples, numBoundaryPoints);
+            await this.fetchElevations(this.samples, this.numBoundaryPoints);
 
             // Count how many got elevations
             const withElevation = this.samples.filter(p => p.elevation !== null && p.elevation !== undefined).length;
@@ -1563,22 +1578,34 @@ class ContourMapApp {
         const sw = this.selectedBounds.getSouthWest();
         const ne = this.selectedBounds.getNorthEast();
 
-        // Set canvas size based on actual container size
+        // Set canvas size to fit within visible pane area
+        const pane = this.heatmapCanvas.closest('.pane-content-inner');
+        const paneRect = pane ? pane.getBoundingClientRect() : null;
         const rect = this.heatmapCanvas.getBoundingClientRect();
+
         const containerWidth = rect.width || 360;
-        const containerHeight = rect.height || 400;
+        // Calculate available height: pane height minus other elements (controls, margins, button, etc.)
+        const availableHeight = paneRect ? Math.max(200, paneRect.height - 100) : 400;
         const aspectRatio = (ne.lat - sw.lat) / (ne.lng - sw.lng);
 
-        // Fit canvas to container while preserving aspect ratio
+        // Fit canvas to available space while preserving aspect ratio
         let canvasWidth, canvasHeight;
-        if (containerWidth / containerHeight > 1 / aspectRatio) {
+        const containerAspectRatio = containerWidth / availableHeight;
+        const mapAspectRatio = 1 / aspectRatio; // inverse because lat/lng
+
+        if (containerAspectRatio > mapAspectRatio) {
             // Container is wider - fit to height
-            canvasHeight = Math.min(containerHeight - 20, 400);
+            canvasHeight = availableHeight;
             canvasWidth = canvasHeight / aspectRatio;
         } else {
-            // Container is taller or square - fit to width
-            canvasWidth = containerWidth;
+            // Container is taller - fit to width
+            canvasWidth = containerWidth - 20;
             canvasHeight = canvasWidth * aspectRatio;
+            // Ensure it doesn't exceed available height
+            if (canvasHeight > availableHeight) {
+                canvasHeight = availableHeight;
+                canvasWidth = canvasHeight / aspectRatio;
+            }
         }
 
         this.heatmapCanvas.width = canvasWidth;
