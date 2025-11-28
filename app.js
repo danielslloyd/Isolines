@@ -1597,6 +1597,21 @@ class ContourMapApp {
     drawHeatmap() {
         if (!this.samples || this.samples.length === 0) return;
 
+        console.log(`Drawing heatmap with ${this.samples.length} sample points`);
+
+        // Count points by type for debugging
+        const boundaryCount = this.numBoundaryPoints || 0;
+        const refinementCount = this.refinementPoints ? this.refinementPoints.length : 0;
+        const interiorCount = this.samples.length - boundaryCount - refinementCount;
+
+        console.log(`  - ${boundaryCount} boundary points`);
+        console.log(`  - ${interiorCount} interior points`);
+        console.log(`  - ${refinementCount} refinement points`);
+
+        // Count how many have elevations
+        const withElevations = this.samples.filter(p => p.elevation !== null && p.elevation !== undefined).length;
+        console.log(`  - ${withElevations} points with elevations will be drawn`);
+
         const sw = this.selectedBounds.getSouthWest();
         const ne = this.selectedBounds.getNorthEast();
 
@@ -1797,6 +1812,8 @@ class ContourMapApp {
 
         // Add triangulation overlay if enabled (shown in preview only, not exported)
         if (this.showTriangulation && this.samples && this.samples.length > 0) {
+            console.log(`Drawing triangulation overlay with ${this.samples.length} sample points`);
+
             svg += `    <g id="triangulation-overlay">
 `;
             // Build Delaunay triangulation from sample points
