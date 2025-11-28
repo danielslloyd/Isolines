@@ -501,8 +501,8 @@ class ContourMapApp {
         }
 
         let totalReceived = 0;
-        let boundaryReceived = 0;
-        let interiorReceived = 0;
+        let totalBoundaryReceived = 0;
+        let totalInteriorReceived = 0;
 
         for (let batchIndex = 0; batchIndex < batches.length; batchIndex++) {
             const batch = batches[batchIndex];
@@ -528,6 +528,10 @@ class ContourMapApp {
 
                 const data = await response.json();
 
+                // Track per-batch counts
+                let batchBoundary = 0;
+                let batchInterior = 0;
+
                 data.results.forEach((result, index) => {
                     const pointIndex = batchStartIdx + index;
                     if (pointIndex < points.length) {
@@ -536,14 +540,16 @@ class ContourMapApp {
 
                         const isBoundary = pointIndex < numBoundaryPoints;
                         if (isBoundary) {
-                            boundaryReceived++;
+                            totalBoundaryReceived++;
+                            batchBoundary++;
                         } else {
-                            interiorReceived++;
+                            totalInteriorReceived++;
+                            batchInterior++;
                         }
                     }
                 });
 
-                console.log(`Batch ${batchIndex + 1}/${batches.length}: Received ${data.results.length} elevations (${boundaryReceived} boundary, ${interiorReceived} interior)`);
+                console.log(`Batch ${batchIndex + 1}/${batches.length}: Received ${data.results.length} elevations (${batchBoundary} boundary, ${batchInterior} interior) | Total: ${totalBoundaryReceived} boundary, ${totalInteriorReceived} interior`);
 
                 // Small delay between batches to avoid rate limiting
                 if (batchIndex < batches.length - 1) {
