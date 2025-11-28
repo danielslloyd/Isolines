@@ -486,7 +486,7 @@ class ContourMapApp {
         console.log(`Found ${shortEdges.length} short edges (< ${threshold.toFixed(8)}, median: ${median.toFixed(8)})`);
     }
 
-    async fetchElevations(points) {
+    async fetchElevations(points, numBoundaryPoints = 0) {
         // Use Open-Elevation API (free, no API key required)
         const batchSize = 200; // Limit batch size
         const batches = [];
@@ -495,8 +495,13 @@ class ContourMapApp {
             batches.push(points.slice(i, i + batchSize));
         }
 
+        let totalReceived = 0;
+        let boundaryReceived = 0;
+        let interiorReceived = 0;
+
         for (let batchIndex = 0; batchIndex < batches.length; batchIndex++) {
             const batch = batches[batchIndex];
+            const batchStartIdx = batchIndex * batchSize;
 
             const locations = batch.map(p => ({
                 latitude: p.y,
@@ -519,11 +524,21 @@ class ContourMapApp {
                 const data = await response.json();
 
                 data.results.forEach((result, index) => {
-                    const pointIndex = batchIndex * batchSize + index;
+                    const pointIndex = batchStartIdx + index;
                     if (pointIndex < points.length) {
                         points[pointIndex].elevation = result.elevation;
+                        totalReceived++;
+
+                        const isBoundary = pointIndex < numBoundaryPoints;
+                        if (isBoundary) {
+                            boundaryReceived++;
+                        } else {
+                            interiorReceived++;
+                        }
                     }
                 });
+
+                console.log(`Batch ${batchIndex + 1}/${batches.length}: Received ${data.results.length} elevations (${boundaryReceived} boundary, ${interiorReceived} interior)`);
 
                 // Small delay between batches to avoid rate limiting
                 if (batchIndex < batches.length - 1) {
@@ -1028,9 +1043,17 @@ class ContourMapApp {
         // Start with a copy of the original contours
         this.currentContours = JSON.parse(JSON.stringify(this.originalContours));
 
+        if (removeCount === 0) {
+            console.log('Simplification: No points to remove (slider at 0)');
+            this.displayContours();
+            this.updateSVGPreview();
+            return;
+        }
+
         // Process points in order of importance (smallest area first)
         // Skip points whose removal would create line crossings
         const pointsToRemove = this.simplificationPointRanking.slice(0, removeCount);
+        console.log(`Simplification: Attempting to remove ${removeCount} points...`);
 
         // Build a map of points to remove for quick lookup
         // Track which points should actually be removed after crossing checks
@@ -1080,6 +1103,18 @@ class ContourMapApp {
 
             this.currentContours[level] = newLines;
         }
+
+        // Count total points before and after
+        let originalPoints = 0;
+        let currentPoints = 0;
+        for (const level in this.originalContours) {
+            this.originalContours[level].forEach(line => originalPoints += line.length);
+        }
+        for (const level in this.currentContours) {
+            this.currentContours[level].forEach(line => currentPoints += line.length);
+        }
+
+        console.log(`Simplification complete: ${originalPoints} -> ${currentPoints} points (removed ${originalPoints - currentPoints})`);
 
         // Update displays
         this.displayContours();
@@ -1263,9 +1298,24 @@ class ContourMapApp {
 
         // Set canvas size based on actual container size
         const rect = this.previewCanvas.getBoundingClientRect();
-        const canvasWidth = this.previewCanvas.width = rect.width || 360;
+        const containerWidth = rect.width || 360;
+        const containerHeight = rect.height || 400;
         const aspectRatio = (ne.lat - sw.lat) / (ne.lng - sw.lng);
-        const canvasHeight = this.previewCanvas.height = Math.max(250, canvasWidth * aspectRatio);
+
+        // Fit canvas to container while preserving aspect ratio
+        let canvasWidth, canvasHeight;
+        if (containerWidth / containerHeight > 1 / aspectRatio) {
+            // Container is wider - fit to height
+            canvasHeight = Math.min(containerHeight - 20, 400);
+            canvasWidth = canvasHeight / aspectRatio;
+        } else {
+            // Container is taller or square - fit to width
+            canvasWidth = containerWidth;
+            canvasHeight = canvasWidth * aspectRatio;
+        }
+
+        this.previewCanvas.width = canvasWidth;
+        this.previewCanvas.height = canvasHeight;
 
         const ctx = this.previewCtx;
 
@@ -1465,11 +1515,27 @@ class ContourMapApp {
         try {
             // Generate sample points
             const totalSamples = parseInt(document.getElementById('pane-total-samples').value);
+            const edgeSamples = Math.round(totalSamples * 0.25);
+            const numBoundaryPoints = edgeSamples * 4; // Approximate
 
             this.samples = this.generateSamplePoints(totalSamples);
 
+            console.log(`Generated ${this.samples.length} total sample points`);
+            console.log(`  - ~${numBoundaryPoints} boundary points`);
+            console.log(`  - ~${this.samples.length - numBoundaryPoints} interior points`);
+
             // Fetch elevations
-            await this.fetchElevations(this.samples);
+            await this.fetchElevations(this.samples, numBoundaryPoints);
+
+            // Count how many got elevations
+            const withElevation = this.samples.filter(p => p.elevation !== null && p.elevation !== undefined).length;
+            const withoutElevation = this.samples.length - withElevation;
+
+            console.log(`Elevation fetch complete:`);
+            console.log(`  - ${withElevation} points received elevations`);
+            if (withoutElevation > 0) {
+                console.warn(`  - ${withoutElevation} points missing elevations!`);
+            }
 
             // Adaptive refinement
             await this.adaptiveRefinement(this.samples);
@@ -1499,9 +1565,24 @@ class ContourMapApp {
 
         // Set canvas size based on actual container size
         const rect = this.heatmapCanvas.getBoundingClientRect();
-        const canvasWidth = this.heatmapCanvas.width = rect.width || 360;
+        const containerWidth = rect.width || 360;
+        const containerHeight = rect.height || 400;
         const aspectRatio = (ne.lat - sw.lat) / (ne.lng - sw.lng);
-        const canvasHeight = this.heatmapCanvas.height = Math.max(300, canvasWidth * aspectRatio);
+
+        // Fit canvas to container while preserving aspect ratio
+        let canvasWidth, canvasHeight;
+        if (containerWidth / containerHeight > 1 / aspectRatio) {
+            // Container is wider - fit to height
+            canvasHeight = Math.min(containerHeight - 20, 400);
+            canvasWidth = canvasHeight / aspectRatio;
+        } else {
+            // Container is taller or square - fit to width
+            canvasWidth = containerWidth;
+            canvasHeight = canvasWidth * aspectRatio;
+        }
+
+        this.heatmapCanvas.width = canvasWidth;
+        this.heatmapCanvas.height = canvasHeight;
 
         const ctx = this.heatmapCtx;
 

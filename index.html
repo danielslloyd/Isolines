@@ -117,7 +117,8 @@
             flex-direction: column;
             background: white;
             z-index: 1000;
-            overflow: hidden;
+            overflow-y: auto;
+            overflow-x: hidden;
         }
 
         .map-container {
@@ -136,16 +137,15 @@
             border-bottom: 2px solid #e0e0e0;
             transition: all 0.3s ease;
             flex-shrink: 0;
+            min-height: 45px;
         }
 
         .workflow-pane.open {
-            flex: 1;
-            display: flex;
-            flex-direction: column;
+            min-height: 300px;
         }
 
         .pane-header {
-            padding: 15px 20px;
+            padding: 12px 20px;
             background: #34495e;
             color: white;
             cursor: pointer;
@@ -153,6 +153,7 @@
             align-items: center;
             justify-content: space-between;
             user-select: none;
+            flex-shrink: 0;
         }
 
         .pane-header:hover {
@@ -176,13 +177,13 @@
         }
 
         .pane-header h3 {
-            font-size: 16px;
+            font-size: 15px;
             font-weight: 600;
             margin: 0;
         }
 
         .pane-header .status-icon {
-            font-size: 20px;
+            font-size: 18px;
         }
 
         .pane-content {
