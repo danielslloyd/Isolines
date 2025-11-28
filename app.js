@@ -627,16 +627,28 @@ class ContourMapApp {
     }
 
     generateContourLinesFromTriangles(points, interval) {
+        console.log(`Starting contour generation with ${points.length} points at ${interval}m interval`);
+
+        // Filter out points without valid elevations
+        const validPoints = points.filter(p => p.elevation !== null && p.elevation !== undefined);
+        console.log(`  - ${validPoints.length} points have valid elevations`);
+        console.log(`  - ${points.length - validPoints.length} points missing elevations`);
+
+        if (validPoints.length < 3) {
+            console.error('Not enough points with elevations to generate contours');
+            return;
+        }
+
         // Find min and max elevations
         let minElev = Infinity;
         let maxElev = -Infinity;
 
-        for (const point of points) {
-            if (point.elevation !== null) {
-                minElev = Math.min(minElev, point.elevation);
-                maxElev = Math.max(maxElev, point.elevation);
-            }
+        for (const point of validPoints) {
+            minElev = Math.min(minElev, point.elevation);
+            maxElev = Math.max(maxElev, point.elevation);
         }
+
+        console.log(`  - Elevation range: ${minElev.toFixed(1)}m to ${maxElev.toFixed(1)}m`);
 
         // Generate contour levels
         const levels = [];
@@ -645,11 +657,15 @@ class ContourMapApp {
             levels.push(level);
         }
 
-        // Build Delaunay triangulation
-        const pointsArray = points.map(p => [p.x, p.y]);
-        const elevations = points.map(p => p.elevation);
+        console.log(`  - Generating ${levels.length} contour levels`);
+
+        // Build Delaunay triangulation using only valid points
+        const pointsArray = validPoints.map(p => [p.x, p.y]);
+        const elevations = validPoints.map(p => p.elevation);
         const delaunay = d3.Delaunay.from(pointsArray);
         const triangles = delaunay.triangles;
+
+        console.log(`  - Created ${triangles.length / 3} triangles from ${validPoints.length} points`);
 
         // Extract contour segments for each level
         const contourSegments = {};
