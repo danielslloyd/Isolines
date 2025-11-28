@@ -1675,13 +1675,35 @@ class ContourMapApp {
         const width = ne.lng - sw.lng;
         const height = ne.lat - sw.lat;
 
+        console.log(`  - Geographic range: lng ${width.toFixed(8)}° x lat ${height.toFixed(8)}°`);
+
+        // Track coordinate distribution for debugging
+        let drawnCount = 0;
+        let skippedCount = 0;
+        const coordSet = new Set(); // Track unique canvas positions
+
         // Draw points as fat dots with heatmap colors
         this.samples.forEach((p, index) => {
-            if (p.elevation === null) return;
+            if (p.elevation === null) {
+                skippedCount++;
+                return;
+            }
 
             const x = ((p.x - sw.lng) / width) * canvasWidth;
             const y = canvasHeight - ((p.y - sw.lat) / height) * canvasHeight;
 
+            // Check if coordinates are valid
+            if (isNaN(x) || isNaN(y) || !isFinite(x) || !isFinite(y)) {
+                console.warn(`Invalid coordinates for point ${index}: x=${x}, y=${y}, geo=(${p.x}, ${p.y})`);
+                skippedCount++;
+                return;
+            }
+
+            // Track unique pixel positions
+            const pixelKey = `${Math.round(x)},${Math.round(y)}`;
+            coordSet.add(pixelKey);
+
+            drawnCount++;
             const normalized = elevRange > 0 ? (p.elevation - minElev) / elevRange : 0;
             const hue = (1 - normalized) * 240; // 240 = blue (low), 0 = red (high)
             ctx.fillStyle = `hsl(${hue}, 70%, 50%)`;
@@ -1700,6 +1722,12 @@ class ContourMapApp {
                 ctx.stroke();
             }
         });
+
+        console.log(`  - Drew ${drawnCount} points, skipped ${skippedCount}`);
+        console.log(`  - ${coordSet.size} unique pixel positions (${drawnCount - coordSet.size} overlapping)`);
+        if (coordSet.size < drawnCount * 0.5) {
+            console.warn(`⚠️ Many points are overlapping! Only ${coordSet.size} unique positions for ${drawnCount} points`);
+        }
 
         // Add hover info (stored for later use)
         this.heatmapCanvas.addEventListener('mousemove', (e) => {
