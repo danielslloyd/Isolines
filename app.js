@@ -360,64 +360,108 @@ class ContourMapApp {
         const sw = this.selectedBounds.getSouthWest();
         const ne = this.selectedBounds.getNorthEast();
 
-        const bounds = {
+        const geoBounds = {
             minX: sw.lng,
             maxX: ne.lng,
             minY: sw.lat,
             maxY: ne.lat
         };
 
-        const width = bounds.maxX - bounds.minX;
-        const height = bounds.maxY - bounds.minY;
+        const geoWidth = geoBounds.maxX - geoBounds.minX;
+        const geoHeight = geoBounds.maxY - geoBounds.minY;
+
+        // Use a normalized coordinate space (0-1000) for point generation
+        // This ensures good distribution regardless of geographic scale
+        const NORMALIZED_SIZE = 1000;
+        const aspectRatio = geoWidth / geoHeight;
+        const normWidth = NORMALIZED_SIZE;
+        const normHeight = NORMALIZED_SIZE / aspectRatio;
+
+        const normalizedBounds = {
+            minX: 0,
+            maxX: normWidth,
+            minY: 0,
+            maxY: normHeight
+        };
 
         // 25% edge, 75% interior
         const edgeSamples = Math.round(totalSamples * 0.25);
         const interiorSamples = totalSamples - edgeSamples;
 
         // Calculate edge distribution
-        const aspectRatio = width / height;
         const xSamples = Math.round(Math.sqrt(edgeSamples * aspectRatio));
         const ySamples = Math.round(edgeSamples / xSamples);
 
         const points = [];
 
-        // Generate edge samples
+        // Generate edge samples in normalized space, then convert to geo
         // Top edge
         for (let i = 0; i < xSamples; i++) {
-            const x = bounds.minX + (i / (xSamples - 1)) * width;
-            points.push({ x, y: bounds.maxY, elevation: null });
+            const normX = (i / (xSamples - 1)) * normWidth;
+            const x = geoBounds.minX + (normX / normWidth) * geoWidth;
+            points.push({ x, y: geoBounds.maxY, elevation: null });
         }
 
         // Bottom edge
         for (let i = 0; i < xSamples; i++) {
-            const x = bounds.minX + (i / (xSamples - 1)) * width;
-            points.push({ x, y: bounds.minY, elevation: null });
+            const normX = (i / (xSamples - 1)) * normWidth;
+            const x = geoBounds.minX + (normX / normWidth) * geoWidth;
+            points.push({ x, y: geoBounds.minY, elevation: null });
         }
 
         // Left edge (excluding corners)
         for (let i = 1; i < ySamples - 1; i++) {
-            const y = bounds.minY + (i / (ySamples - 1)) * height;
-            points.push({ x: bounds.minX, y, elevation: null });
+            const normY = (i / (ySamples - 1)) * normHeight;
+            const y = geoBounds.minY + (normY / normHeight) * geoHeight;
+            points.push({ x: geoBounds.minX, y, elevation: null });
         }
 
         // Right edge (excluding corners)
         for (let i = 1; i < ySamples - 1; i++) {
-            const y = bounds.minY + (i / (ySamples - 1)) * height;
-            points.push({ x: bounds.maxX, y, elevation: null });
+            const normY = (i / (ySamples - 1)) * normHeight;
+            const y = geoBounds.minY + (normY / normHeight) * geoHeight;
+            points.push({ x: geoBounds.maxX, y, elevation: null });
         }
 
-        // Generate interior samples using Mitchell's best-candidate algorithm
-        const mitchell = new MitchellSampling(bounds, 20); // 20 candidates per point
-        const interiorPoints = mitchell.generate(interiorSamples);
+        // Generate interior samples in normalized space using Mitchell's algorithm
+        const mitchell = new MitchellSampling(normalizedBounds, 20);
+        const normalizedInteriorPoints = mitchell.generate(interiorSamples);
 
-        interiorPoints.forEach(p => {
-            points.push({ x: p.x, y: p.y, elevation: null });
+        // Convert normalized points to geo coordinates
+        normalizedInteriorPoints.forEach(p => {
+            const geoX = geoBounds.minX + (p.x / normWidth) * geoWidth;
+            const geoY = geoBounds.minY + (p.y / normHeight) * geoHeight;
+            points.push({ x: geoX, y: geoY, elevation: null });
         });
 
-        // Apply relaxation to push points apart (keeping edge points fixed)
-        const numBoundaryPoints = points.length - interiorPoints.length;
-        const edgePoints = points.slice(0, numBoundaryPoints);
-        PointRelaxation.relax(points, edgePoints, bounds, 10);
+        // Apply relaxation in normalized space, then convert to geo
+        const numBoundaryPoints = points.length - normalizedInteriorPoints.length;
+
+        // Create normalized point array for relaxation
+        const normalizedPoints = [];
+
+        // Add boundary points
+        for (let i = 0; i < numBoundaryPoints; i++) {
+            const p = points[i];
+            const normX = ((p.x - geoBounds.minX) / geoWidth) * normWidth;
+            const normY = ((p.y - geoBounds.minY) / geoHeight) * normHeight;
+            normalizedPoints.push({ x: normX, y: normY });
+        }
+
+        // Add interior points (already in normalized space)
+        normalizedInteriorPoints.forEach(p => {
+            normalizedPoints.push({ x: p.x, y: p.y });
+        });
+
+        const edgePoints = normalizedPoints.slice(0, numBoundaryPoints);
+        PointRelaxation.relax(normalizedPoints, edgePoints, normalizedBounds, 10);
+
+        // Convert relaxed points back to geo coordinates
+        for (let i = 0; i < normalizedPoints.length; i++) {
+            const normP = normalizedPoints[i];
+            points[i].x = geoBounds.minX + (normP.x / normWidth) * geoWidth;
+            points[i].y = geoBounds.minY + (normP.y / normHeight) * geoHeight;
+        }
 
         // Store boundary point count for later use
         this.numBoundaryPoints = numBoundaryPoints;
