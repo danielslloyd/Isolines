@@ -23,6 +23,8 @@ class ContourMapApp {
         this.showTriangulation = false;
         this.showMapSnapshot = false;
         this.mapSnapshotDataURL = null;
+        this.shortEdges = [];
+        this.medianEdgeLength = 0;
 
         this.init();
     }
@@ -415,13 +417,13 @@ class ContourMapApp {
         const edgePoints = points.slice(0, points.length - interiorPoints.length);
         PointRelaxation.relax(points, edgePoints, bounds, 10);
 
-        // Deduplicate points based on median edge length
-        const deduplicatedPoints = this.deduplicatePoints(points, edgePoints.length);
+        // Calculate short edges for visualization (don't delete points)
+        this.calculateShortEdges(points);
 
-        return deduplicatedPoints;
+        return points;
     }
 
-    deduplicatePoints(points, numBoundaryPoints) {
+    calculateShortEdges(points) {
         // Build Delaunay triangulation to get edge lengths
         const pointsArray = points.map(p => [p.x, p.y]);
         const delaunay = d3.Delaunay.from(pointsArray);
@@ -429,7 +431,7 @@ class ContourMapApp {
         // Calculate all edge lengths from triangulation
         const edgeLengths = [];
         const triangles = delaunay.triangles;
-        const edgeSet = new Set();
+        const edges = [];
 
         for (let i = 0; i < triangles.length; i += 3) {
             const i0 = triangles[i];
@@ -437,21 +439,27 @@ class ContourMapApp {
             const i2 = triangles[i + 2];
 
             // Add each edge
-            const edges = [
+            const edgePairs = [
                 [i0, i1],
                 [i1, i2],
                 [i2, i0]
             ];
 
-            edges.forEach(([a, b]) => {
+            edgePairs.forEach(([a, b]) => {
                 const key = a < b ? `${a}_${b}` : `${b}_${a}`;
-                if (!edgeSet.has(key)) {
-                    edgeSet.add(key);
-                    const dx = pointsArray[a][0] - pointsArray[b][0];
-                    const dy = pointsArray[a][1] - pointsArray[b][1];
-                    const length = Math.sqrt(dx * dx + dy * dy);
-                    edgeLengths.push(length);
-                }
+                const dx = pointsArray[a][0] - pointsArray[b][0];
+                const dy = pointsArray[a][1] - pointsArray[b][1];
+                const length = Math.sqrt(dx * dx + dy * dy);
+
+                edges.push({
+                    key,
+                    a,
+                    b,
+                    length,
+                    p1: points[a],
+                    p2: points[b]
+                });
+                edgeLengths.push(length);
             });
         }
 
@@ -460,41 +468,22 @@ class ContourMapApp {
         const median = edgeLengths[Math.floor(edgeLengths.length / 2)];
         const threshold = 0.25 * median;
 
-        // Mark points for removal (never remove boundary points)
-        const keep = new Array(points.length).fill(true);
+        // Find all unique short edges
+        const shortEdges = [];
+        const seenKeys = new Set();
 
-        // Start checking from after the boundary points
-        for (let i = numBoundaryPoints; i < points.length; i++) {
-            if (!keep[i]) continue;
-
-            // Check distance to all previous kept points
-            for (let j = 0; j < i; j++) {
-                if (!keep[j]) continue;
-
-                const dx = points[i].x - points[j].x;
-                const dy = points[i].y - points[j].y;
-                const dist = Math.sqrt(dx * dx + dy * dy);
-
-                if (dist < threshold) {
-                    // Remove the later point (i), never remove boundary points
-                    if (i >= numBoundaryPoints) {
-                        keep[i] = false;
-                        break;
-                    }
-                }
+        edges.forEach(edge => {
+            if (edge.length < threshold && !seenKeys.has(edge.key)) {
+                seenKeys.add(edge.key);
+                shortEdges.push(edge);
             }
-        }
+        });
 
-        // Build deduplicated array
-        const deduplicated = [];
-        for (let i = 0; i < points.length; i++) {
-            if (keep[i]) {
-                deduplicated.push(points[i]);
-            }
-        }
+        // Store for visualization
+        this.shortEdges = shortEdges;
+        this.medianEdgeLength = median;
 
-        console.log(`Deduplicated: ${points.length} -> ${deduplicated.length} points (threshold: ${threshold.toFixed(8)})`);
-        return deduplicated;
+        console.log(`Found ${shortEdges.length} short edges (< ${threshold.toFixed(8)}, median: ${median.toFixed(8)})`);
     }
 
     async fetchElevations(points) {
@@ -1391,6 +1380,25 @@ class ContourMapApp {
         delaunay.render(ctx);
         ctx.stroke();
 
+        // Highlight short edges (< 0.25 median)
+        if (this.shortEdges && this.shortEdges.length > 0) {
+            ctx.strokeStyle = '#f39c12'; // Orange for short edges
+            ctx.lineWidth = 2;
+
+            this.shortEdges.forEach(edge => {
+                // Map geo coordinates to canvas coordinates
+                const x1 = ((edge.p1.x - bounds.minX) / width) * canvasWidth;
+                const y1 = canvasHeight - ((edge.p1.y - bounds.minY) / height) * canvasHeight;
+                const x2 = ((edge.p2.x - bounds.minX) / width) * canvasWidth;
+                const y2 = canvasHeight - ((edge.p2.y - bounds.minY) / height) * canvasHeight;
+
+                ctx.beginPath();
+                ctx.moveTo(x1, y1);
+                ctx.lineTo(x2, y2);
+                ctx.stroke();
+            });
+        }
+
         // Draw edge points (from relaxed points)
         ctx.fillStyle = '#e74c3c';
         const numEdgePoints = edgePointsForRelaxation.length;
@@ -1413,7 +1421,8 @@ class ContourMapApp {
         // Add legend
         ctx.font = '12px -apple-system, sans-serif';
         ctx.fillStyle = 'rgba(255, 255, 255, 0.9)';
-        ctx.fillRect(8, 8, 130, 54);
+        const legendHeight = this.shortEdges && this.shortEdges.length > 0 ? 74 : 54;
+        ctx.fillRect(8, 8, 140, legendHeight);
 
         ctx.fillStyle = '#e74c3c';
         ctx.fillRect(10, 10, 12, 12);
@@ -1432,6 +1441,18 @@ class ContourMapApp {
         ctx.stroke();
         ctx.fillStyle = '#2c3e50';
         ctx.fillText('Triangulation', 28, 54);
+
+        // Add short edges to legend if present
+        if (this.shortEdges && this.shortEdges.length > 0) {
+            ctx.strokeStyle = '#f39c12';
+            ctx.lineWidth = 2;
+            ctx.beginPath();
+            ctx.moveTo(10, 70);
+            ctx.lineTo(22, 70);
+            ctx.stroke();
+            ctx.fillStyle = '#2c3e50';
+            ctx.fillText(`Short edges (${this.shortEdges.length})`, 28, 74);
+        }
     }
 
     async lockPointsAndFetchElevations() {
@@ -1693,19 +1714,20 @@ class ContourMapApp {
 `;
         }
 
-        // Add simplification preview (show smallest triangles being removed in red)
+        // Add simplification preview (show next 10 triangles to be removed in red)
         if (this.simplificationPointRanking && this.simplificationPointRanking.length > 0) {
             const slider = document.getElementById('pane-simplify-slider');
             const removeCount = slider ? parseInt(slider.value) : 0;
 
-            if (removeCount > 0) {
+            if (removeCount < this.simplificationPointRanking.length) {
                 svg += `    <g id="simplification-preview">
 `;
-                // Get the points being removed (smallest triangles)
-                const pointsBeingRemoved = this.simplificationPointRanking.slice(0, removeCount);
+                // Show the NEXT 10 triangles that would be removed
+                const nextBatch = Math.min(10, this.simplificationPointRanking.length - removeCount);
+                const nextPoints = this.simplificationPointRanking.slice(removeCount, removeCount + nextBatch);
 
                 // Draw triangles for these points
-                pointsBeingRemoved.forEach(removal => {
+                nextPoints.forEach(removal => {
                     const line = this.originalContours[removal.level][removal.lineIndex];
                     if (!line || removal.pointIndex >= line.length) return;
 
