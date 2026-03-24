@@ -35,6 +35,22 @@ class ContourMapApp {
         this.initControls();
         this.initPanes();
         this.setupRightClickSelection();
+
+        // Re-render canvases on window resize so panes fit properly
+        window.addEventListener('resize', () => {
+            if (this._resizeTimer) clearTimeout(this._resizeTimer);
+            this._resizeTimer = setTimeout(() => {
+                if (this.currentPane === 1 && this.map) {
+                    this.map.invalidateSize();
+                } else if (this.currentPane === 2 && this.selectedBounds) {
+                    this.updatePreview();
+                } else if (this.currentPane === 3 && this.samples && this.samples.length > 0) {
+                    this.drawHeatmap();
+                } else if (this.currentPane === 4 && this.currentContours) {
+                    this.updateSVGPreview();
+                }
+            }, 150);
+        });
     }
 
     initMap() {
@@ -158,6 +174,19 @@ class ContourMapApp {
         if (pane) {
             pane.classList.add('open');
             this.currentPane = paneNumber;
+
+            // After layout settles, refresh size-dependent content
+            requestAnimationFrame(() => {
+                if (paneNumber === 1 && this.map) {
+                    this.map.invalidateSize();
+                } else if (paneNumber === 2 && this.selectedBounds) {
+                    this.updatePreview();
+                } else if (paneNumber === 3 && this.samples && this.samples.length > 0) {
+                    this.drawHeatmap();
+                } else if (paneNumber === 4 && this.currentContours) {
+                    this.updateSVGPreview();
+                }
+            });
         }
     }
 
@@ -374,10 +403,10 @@ class ContourMapApp {
         const edgeSamples = Math.round(totalSamples * 0.25);
         const interiorSamples = totalSamples - edgeSamples;
 
-        // Calculate edge distribution
-        const aspectRatio = width / height;
-        const xSamples = Math.round(Math.sqrt(edgeSamples * aspectRatio));
-        const ySamples = Math.round(edgeSamples / xSamples);
+        // Calculate edge distribution based on perimeter ratio
+        const perimeter = 2 * (width + height);
+        const xSamples = Math.max(4, Math.round(edgeSamples * (width / perimeter)));
+        const ySamples = Math.max(4, Math.round(edgeSamples * (height / perimeter)));
 
         const points = [];
 
@@ -407,7 +436,7 @@ class ContourMapApp {
         }
 
         // Generate interior samples using Mitchell's best-candidate algorithm
-        const mitchell = new MitchellSampling(bounds, 20); // 20 candidates per point
+        const mitchell = new MitchellSampling(bounds, 30); // 30 candidates per point
         const interiorPoints = mitchell.generate(interiorSamples);
 
         interiorPoints.forEach(p => {
@@ -692,11 +721,13 @@ class ContourMapApp {
             }
         }
 
-        // Connect segments into polylines
+        // Connect segments into polylines and smooth them
         this.originalContours = {};
         for (const level in contourSegments) {
             const segments = contourSegments[level];
-            this.originalContours[level] = this.connectContourSegments(segments);
+            const connected = this.connectContourSegments(segments);
+            // Apply Chaikin subdivision for organic-looking curves
+            this.originalContours[level] = connected.map(line => this.smoothContourLine(line, 2));
         }
 
         this.currentContours = JSON.parse(JSON.stringify(this.originalContours));
@@ -859,6 +890,43 @@ class ContourMapApp {
         }
 
         return lines;
+    }
+
+    /**
+     * Smooth a contour polyline using Chaikin's corner-cutting algorithm.
+     * Each iteration replaces each interior segment with two points at 1/4 and 3/4,
+     * producing progressively smoother curves that stay within the convex hull
+     * of the original polyline (so contour lines won't cross).
+     */
+    smoothContourLine(line, iterations = 2) {
+        if (line.length <= 2) return line;
+
+        let current = line;
+        for (let iter = 0; iter < iterations; iter++) {
+            const smoothed = [current[0]]; // Keep first point
+
+            for (let i = 0; i < current.length - 1; i++) {
+                const p0 = current[i];
+                const p1 = current[i + 1];
+
+                // Q = 3/4 * P0 + 1/4 * P1
+                smoothed.push({
+                    x: 0.75 * p0.x + 0.25 * p1.x,
+                    y: 0.75 * p0.y + 0.25 * p1.y
+                });
+
+                // R = 1/4 * P0 + 3/4 * P1
+                smoothed.push({
+                    x: 0.25 * p0.x + 0.75 * p1.x,
+                    y: 0.25 * p0.y + 0.75 * p1.y
+                });
+            }
+
+            smoothed.push(current[current.length - 1]); // Keep last point
+            current = smoothed;
+        }
+
+        return current;
     }
 
     createGrid(points) {
@@ -1383,9 +1451,10 @@ class ContourMapApp {
         const width = bounds.maxX - bounds.minX;
         const height = bounds.maxY - bounds.minY;
 
-        // Calculate edge distribution
-        const xSamples = Math.round(Math.sqrt(edgeSamples * (width / height)));
-        const ySamples = Math.round(edgeSamples / xSamples);
+        // Calculate edge distribution based on perimeter ratio
+        const perimeter = 2 * (width + height);
+        const xSamples = Math.max(4, Math.round(edgeSamples * (width / perimeter)));
+        const ySamples = Math.max(4, Math.round(edgeSamples * (height / perimeter)));
 
         // Draw edge points
         ctx.fillStyle = '#e74c3c';
@@ -1430,7 +1499,7 @@ class ContourMapApp {
             maxY: canvasHeight - 5
         };
 
-        const mitchell = new MitchellSampling(canvasBounds, 20);
+        const mitchell = new MitchellSampling(canvasBounds, 30);
         const interiorPoints = mitchell.generate(interiorSamples);
 
         // Collect all points for relaxation
