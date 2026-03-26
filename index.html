@@ -117,14 +117,14 @@
             flex-direction: column;
             background: white;
             z-index: 1000;
-            overflow-y: auto;
-            overflow-x: hidden;
+            overflow: hidden;
         }
 
         .map-container {
             width: 100%;
             flex: 1;
-            min-height: 400px;
+            min-height: 200px;
+            max-height: 800px;
             border: 2px solid #ddd;
             border-radius: 4px;
             margin: 10px 0;
@@ -141,8 +141,9 @@
         }
 
         .workflow-pane.open {
-            min-height: 300px;
             flex: 1;
+            min-height: 0;
+            overflow: hidden;
         }
 
         .pane-header {
@@ -199,7 +200,7 @@
         .workflow-pane.open .pane-content {
             max-height: none;
             flex: 1;
-            overflow-y: auto;
+            overflow: hidden;
         }
 
         .pane-content-inner {
@@ -207,12 +208,13 @@
             display: flex;
             flex-direction: column;
             flex: 1;
+            overflow: hidden;
         }
 
         .preview-canvas {
             width: 100%;
             flex: 1;
-            min-height: 250px;
+            min-height: 100px;
             border: 2px solid #ddd;
             border-radius: 4px;
             background: white;
@@ -222,7 +224,7 @@
         .heatmap-canvas {
             width: 100%;
             flex: 1;
-            min-height: 300px;
+            min-height: 100px;
             border: 2px solid #ddd;
             border-radius: 4px;
             background: white;
@@ -233,7 +235,7 @@
         .svg-preview {
             width: 100%;
             flex: 1;
-            min-height: 300px;
+            min-height: 100px;
             border: 2px solid #ddd;
             border-radius: 4px;
             background: white;
@@ -301,23 +303,23 @@
                     </div>
                 </div>
 
-                <!-- Pane 2: Configure Points -->
+                <!-- Pane 2: Sample Terrain -->
                 <div class="workflow-pane" data-pane="2">
                     <div class="pane-header">
-                        <h3>2. Configure Points</h3>
+                        <h3>2. Sample Terrain</h3>
                         <span class="status-icon">⬜</span>
                     </div>
                     <div class="pane-content">
                         <div class="pane-content-inner">
                             <div class="control-group">
-                                <label>Total Sample Points:</label>
-                                <input type="number" id="pane-total-samples" value="500" min="50" max="2000" step="50">
+                                <label>Target Sample Points:</label>
+                                <input type="number" id="pane-total-samples" value="500" min="10" max="2000" step="10">
                                 <small style="color: #666; display: block; margin-top: 5px;">
-                                    25% will be placed on edges, 75% in the interior
+                                    Starts from corners, iteratively splits edges with the most elevation change.
                                 </small>
                             </div>
                             <canvas id="preview-canvas" class="preview-canvas"></canvas>
-                            <button class="pane-button" id="lock-points-btn">Lock Points & Get Elevations</button>
+                            <button class="pane-button" id="lock-points-btn">Sample Terrain</button>
                         </div>
                     </div>
                 </div>
