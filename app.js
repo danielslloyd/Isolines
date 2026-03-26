@@ -1260,8 +1260,10 @@ class ContourMapApp {
 
             if (j >= points.length) break;
 
-            // Skip if this segment is adjacent to the new segment
-            if (i === prevIndex || j === nextIndex || i === removeIndex || j === removeIndex) {
+            // Skip any segment that shares an endpoint with the new shortcut segment
+            // (prevIndex and nextIndex are the new segment's endpoints)
+            if (i === prevIndex || j === prevIndex || i === nextIndex || j === nextIndex ||
+                i === removeIndex || j === removeIndex) {
                 continue;
             }
 
