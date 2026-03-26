@@ -459,7 +459,8 @@ class ContourMapApp {
     }
 
     async fetchElevations(points) {
-        const batchSize = 200;
+        // Use Open-Meteo elevation API (free, CORS-enabled)
+        const batchSize = 100; // Keep URL length reasonable for GET request
         const batches = [];
         for (let i = 0; i < points.length; i += batchSize) {
             batches.push(points.slice(i, i + batchSize));
@@ -468,24 +469,23 @@ class ContourMapApp {
         for (let batchIndex = 0; batchIndex < batches.length; batchIndex++) {
             const batch = batches[batchIndex];
             const batchStartIdx = batchIndex * batchSize;
-            const locations = batch.map(p => ({ latitude: p.y, longitude: p.x }));
+            const lats = batch.map(p => p.y.toFixed(6)).join(',');
+            const lngs = batch.map(p => p.x.toFixed(6)).join(',');
+            const url = `https://api.open-meteo.com/v1/elevation?latitude=${lats}&longitude=${lngs}`;
 
             try {
-                const response = await fetch('https://api.open-elevation.com/api/v1/lookup', {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ locations })
-                });
+                const response = await fetch(url);
                 if (!response.ok) throw new Error(`Elevation API error: ${response.status}`);
 
                 const data = await response.json();
-                data.results.forEach((result, index) => {
+                const elevations = data.elevation;
+                elevations.forEach((elev, index) => {
                     const pointIndex = batchStartIdx + index;
                     if (pointIndex < points.length) {
-                        points[pointIndex].elevation = result.elevation;
+                        points[pointIndex].elevation = elev;
                     }
                 });
-                console.log(`Batch ${batchIndex + 1}/${batches.length}: ${data.results.length} elevations`);
+                console.log(`Batch ${batchIndex + 1}/${batches.length}: ${elevations.length} elevations`);
 
                 if (batchIndex < batches.length - 1) await this.delay(100);
             } catch (error) {
