@@ -595,53 +595,64 @@ class ContourMapApp {
     }
 
     async adaptiveRefinement(points) {
-        // Calculate elevation differences between neighboring points
+        // Use Delaunay triangulation edges to find true neighbors (not O(n²) distance)
+        const validPoints = points.filter(p => p.elevation !== null && p.elevation !== undefined);
+        if (validPoints.length < 3) return;
+
+        const pointsArray = validPoints.map(p => [p.x, p.y]);
+        const delaunay = d3.Delaunay.from(pointsArray);
+        const triangles = delaunay.triangles;
+
+        // Collect unique edges from triangulation
+        const edgeSet = new Set();
         const differences = [];
 
-        for (let i = 0; i < points.length; i++) {
-            for (let j = i + 1; j < points.length; j++) {
-                const dx = points[i].x - points[j].x;
-                const dy = points[i].y - points[j].y;
-                const distance = Math.sqrt(dx * dx + dy * dy);
+        for (let i = 0; i < triangles.length; i += 3) {
+            const indices = [triangles[i], triangles[i+1], triangles[i+2]];
+            const edges = [[indices[0], indices[1]], [indices[1], indices[2]], [indices[2], indices[0]]];
 
-                // Consider points as neighbors if they're close
-                const sw = this.selectedBounds.getSouthWest();
-                const ne = this.selectedBounds.getNorthEast();
-                const maxDist = Math.max(ne.lng - sw.lng, ne.lat - sw.lat) * 0.15;
-
-                if (distance < maxDist) {
-                    const elevDiff = Math.abs(points[i].elevation - points[j].elevation);
+            edges.forEach(([a, b]) => {
+                const key = a < b ? `${a}_${b}` : `${b}_${a}`;
+                if (!edgeSet.has(key)) {
+                    edgeSet.add(key);
+                    const elevDiff = Math.abs(validPoints[a].elevation - validPoints[b].elevation);
                     differences.push({
-                        i, j, distance, elevDiff,
+                        a, b, elevDiff,
                         midpoint: {
-                            x: (points[i].x + points[j].x) / 2,
-                            y: (points[i].y + points[j].y) / 2
+                            x: (validPoints[a].x + validPoints[b].x) / 2,
+                            y: (validPoints[a].y + validPoints[b].y) / 2
                         }
                     });
                 }
-            }
+            });
         }
 
-        // Calculate 95th percentile
-        differences.sort((a, b) => a.elevDiff - b.elevDiff);
-        const percentile95Index = Math.floor(differences.length * 0.95);
-        const threshold = differences[percentile95Index]?.elevDiff || 0;
+        if (differences.length === 0) return;
 
-        // Add midpoints for pairs with high elevation difference
+        // Sort by elevation difference descending, take edges above 90th percentile
+        differences.sort((a, b) => a.elevDiff - b.elevDiff);
+        const percentile90Index = Math.floor(differences.length * 0.90);
+        const threshold = differences[percentile90Index]?.elevDiff || 0;
+
+        // Cap refinement at 15% of original point count to avoid clustering
+        const maxRefinement = Math.round(points.length * 0.15);
+        const candidates = differences.filter(d => d.elevDiff >= threshold);
+        // Sort by highest diff first so we prioritize the steepest areas
+        candidates.sort((a, b) => b.elevDiff - a.elevDiff);
+
         const newPoints = [];
         const addedPoints = new Set();
 
-        for (const diff of differences) {
-            if (diff.elevDiff >= threshold) {
-                const key = `${diff.midpoint.x.toFixed(8)},${diff.midpoint.y.toFixed(8)}`;
-                if (!addedPoints.has(key)) {
-                    newPoints.push({
-                        x: diff.midpoint.x,
-                        y: diff.midpoint.y,
-                        elevation: null
-                    });
-                    addedPoints.add(key);
-                }
+        for (const diff of candidates) {
+            if (newPoints.length >= maxRefinement) break;
+            const key = `${diff.midpoint.x.toFixed(8)},${diff.midpoint.y.toFixed(8)}`;
+            if (!addedPoints.has(key)) {
+                newPoints.push({
+                    x: diff.midpoint.x,
+                    y: diff.midpoint.y,
+                    elevation: null
+                });
+                addedPoints.add(key);
             }
         }
 
@@ -651,7 +662,7 @@ class ContourMapApp {
 
             await this.fetchElevations(newPoints);
             this.samples.push(...newPoints);
-            this.refinementPoints = newPoints; // Track for highlighting
+            this.refinementPoints = newPoints;
         }
     }
 
@@ -1397,24 +1408,20 @@ class ContourMapApp {
         const rect = this.previewCanvas.getBoundingClientRect();
 
         const containerWidth = rect.width || 360;
-        // Calculate available height: pane height minus other elements (controls, margins, etc.)
         const availableHeight = paneRect ? Math.max(200, paneRect.height - 150) : 400;
         const aspectRatio = (ne.lat - sw.lat) / (ne.lng - sw.lng);
 
         // Fit canvas to available space while preserving aspect ratio
         let canvasWidth, canvasHeight;
         const containerAspectRatio = containerWidth / availableHeight;
-        const mapAspectRatio = 1 / aspectRatio; // inverse because lat/lng
+        const mapAspectRatio = 1 / aspectRatio;
 
         if (containerAspectRatio > mapAspectRatio) {
-            // Container is wider - fit to height
             canvasHeight = availableHeight;
             canvasWidth = canvasHeight / aspectRatio;
         } else {
-            // Container is taller - fit to width
             canvasWidth = containerWidth - 20;
             canvasHeight = canvasWidth * aspectRatio;
-            // Ensure it doesn't exceed available height
             if (canvasHeight > availableHeight) {
                 canvasHeight = availableHeight;
                 canvasWidth = canvasHeight / aspectRatio;
@@ -1430,153 +1437,77 @@ class ContourMapApp {
         ctx.fillStyle = '#f9f9f9';
         ctx.fillRect(0, 0, canvasWidth, canvasHeight);
 
-        // Draw border (same aspect ratio as selected area)
+        // Draw border
         ctx.strokeStyle = '#3498db';
         ctx.lineWidth = 2;
         ctx.strokeRect(0, 0, canvasWidth, canvasHeight);
 
-        // Get sample parameters
+        // Generate the actual sample points (same ones that will be used for elevation)
         const totalSamples = parseInt(document.getElementById('pane-total-samples').value);
-        const edgeSamples = Math.round(totalSamples * 0.25);
-        const interiorSamples = totalSamples - edgeSamples;
+        this.samples = this.generateSamplePoints(totalSamples);
 
-        // Preview points (simplified calculation)
-        const bounds = {
-            minX: sw.lng,
-            maxX: ne.lng,
-            minY: sw.lat,
-            maxY: ne.lat
-        };
+        const geoWidth = ne.lng - sw.lng;
+        const geoHeight = ne.lat - sw.lat;
 
-        const width = bounds.maxX - bounds.minX;
-        const height = bounds.maxY - bounds.minY;
+        // Helper to map geographic coords to canvas coords
+        const toCanvasX = (lng) => ((lng - sw.lng) / geoWidth) * canvasWidth;
+        const toCanvasY = (lat) => canvasHeight - ((lat - sw.lat) / geoHeight) * canvasHeight;
 
-        // Calculate edge distribution based on perimeter ratio
-        const perimeter = 2 * (width + height);
-        const xSamples = Math.max(4, Math.round(edgeSamples * (width / perimeter)));
-        const ySamples = Math.max(4, Math.round(edgeSamples * (height / perimeter)));
+        // Build Delaunay triangulation for visualization
+        const pointsArray = this.samples.map(p => [p.x, p.y]);
+        const delaunay = d3.Delaunay.from(pointsArray);
 
-        // Draw edge points
-        ctx.fillStyle = '#e74c3c';
-
-        // Top edge
-        for (let i = 0; i < xSamples; i++) {
-            const x = (i / (xSamples - 1)) * canvasWidth;
-            ctx.beginPath();
-            ctx.arc(x, 0, 3, 0, Math.PI * 2);
-            ctx.fill();
-        }
-
-        // Bottom edge
-        for (let i = 0; i < xSamples; i++) {
-            const x = (i / (xSamples - 1)) * canvasWidth;
-            ctx.beginPath();
-            ctx.arc(x, canvasHeight, 3, 0, Math.PI * 2);
-            ctx.fill();
-        }
-
-        // Left edge
-        for (let i = 1; i < ySamples - 1; i++) {
-            const y = (i / (ySamples - 1)) * canvasHeight;
-            ctx.beginPath();
-            ctx.arc(0, y, 3, 0, Math.PI * 2);
-            ctx.fill();
-        }
-
-        // Right edge
-        for (let i = 1; i < ySamples - 1; i++) {
-            const y = (i / (ySamples - 1)) * canvasHeight;
-            ctx.beginPath();
-            ctx.arc(canvasWidth, y, 3, 0, Math.PI * 2);
-            ctx.fill();
-        }
-
-        // Draw interior points using Mitchell's best-candidate
-        const canvasBounds = {
-            minX: 5,
-            maxX: canvasWidth - 5,
-            minY: 5,
-            maxY: canvasHeight - 5
-        };
-
-        const mitchell = new MitchellSampling(canvasBounds, 30);
-        const interiorPoints = mitchell.generate(interiorSamples);
-
-        // Collect all points for relaxation
-        const allPoints = [];
-
-        // Add edge points
-        for (let i = 0; i < xSamples; i++) {
-            const x = (i / (xSamples - 1)) * canvasWidth;
-            allPoints.push({x, y: 0});
-            allPoints.push({x, y: canvasHeight});
-        }
-        for (let i = 1; i < ySamples - 1; i++) {
-            const y = (i / (ySamples - 1)) * canvasHeight;
-            allPoints.push({x: 0, y});
-            allPoints.push({x: canvasWidth, y});
-        }
-
-        const edgePointsForRelaxation = allPoints.slice();
-
-        // Add interior points
-        interiorPoints.forEach(p => {
-            allPoints.push(p);
-        });
-
-        // Apply relaxation
-        PointRelaxation.relax(allPoints, edgePointsForRelaxation, canvasBounds, 10);
-
-        // Build Delaunay triangulation for visualization using relaxed points
-        const allPreviewPoints = allPoints.map(p => [p.x, p.y]);
-
-        // Draw Delaunay triangulation
-        const delaunay = d3.Delaunay.from(allPreviewPoints);
+        // Draw triangulation edges (mapped to canvas)
         ctx.strokeStyle = 'rgba(200, 200, 200, 0.3)';
         ctx.lineWidth = 1;
-        ctx.beginPath();
-        delaunay.render(ctx);
-        ctx.stroke();
+        const triangles = delaunay.triangles;
+        const drawnEdges = new Set();
+        for (let i = 0; i < triangles.length; i += 3) {
+            const indices = [triangles[i], triangles[i+1], triangles[i+2]];
+            const edges = [[indices[0], indices[1]], [indices[1], indices[2]], [indices[2], indices[0]]];
+            edges.forEach(([a, b]) => {
+                const key = a < b ? `${a}_${b}` : `${b}_${a}`;
+                if (!drawnEdges.has(key)) {
+                    drawnEdges.add(key);
+                    ctx.beginPath();
+                    ctx.moveTo(toCanvasX(pointsArray[a][0]), toCanvasY(pointsArray[a][1]));
+                    ctx.lineTo(toCanvasX(pointsArray[b][0]), toCanvasY(pointsArray[b][1]));
+                    ctx.stroke();
+                }
+            });
+        }
 
-        // Highlight short edges (< 0.25 median)
+        // Highlight short edges
         if (this.shortEdges && this.shortEdges.length > 0) {
-            ctx.strokeStyle = '#f39c12'; // Orange for short edges
+            ctx.strokeStyle = '#f39c12';
             ctx.lineWidth = 2;
-
             this.shortEdges.forEach(edge => {
-                // Map geo coordinates to canvas coordinates
-                const x1 = ((edge.p1.x - bounds.minX) / width) * canvasWidth;
-                const y1 = canvasHeight - ((edge.p1.y - bounds.minY) / height) * canvasHeight;
-                const x2 = ((edge.p2.x - bounds.minX) / width) * canvasWidth;
-                const y2 = canvasHeight - ((edge.p2.y - bounds.minY) / height) * canvasHeight;
-
                 ctx.beginPath();
-                ctx.moveTo(x1, y1);
-                ctx.lineTo(x2, y2);
+                ctx.moveTo(toCanvasX(edge.p1.x), toCanvasY(edge.p1.y));
+                ctx.lineTo(toCanvasX(edge.p2.x), toCanvasY(edge.p2.y));
                 ctx.stroke();
             });
         }
 
-        // Draw edge points (from relaxed points)
+        // Draw edge points
         ctx.fillStyle = '#e74c3c';
-        const numEdgePoints = edgePointsForRelaxation.length;
-        for (let i = 0; i < numEdgePoints; i++) {
-            const p = allPoints[i];
+        for (let i = 0; i < this.numBoundaryPoints; i++) {
+            const p = this.samples[i];
             ctx.beginPath();
-            ctx.arc(p.x, p.y, 3, 0, Math.PI * 2);
+            ctx.arc(toCanvasX(p.x), toCanvasY(p.y), 3, 0, Math.PI * 2);
             ctx.fill();
         }
 
-        // Draw interior points (from relaxed points)
+        // Draw interior points
         ctx.fillStyle = '#3498db';
-        for (let i = numEdgePoints; i < allPoints.length; i++) {
-            const p = allPoints[i];
+        for (let i = this.numBoundaryPoints; i < this.samples.length; i++) {
+            const p = this.samples[i];
             ctx.beginPath();
-            ctx.arc(p.x, p.y, 2, 0, Math.PI * 2);
+            ctx.arc(toCanvasX(p.x), toCanvasY(p.y), 2, 0, Math.PI * 2);
             ctx.fill();
         }
 
-        // Add legend
+        // Legend
         ctx.font = '12px -apple-system, sans-serif';
         ctx.fillStyle = 'rgba(255, 255, 255, 0.9)';
         const legendHeight = this.shortEdges && this.shortEdges.length > 0 ? 74 : 54;
@@ -1600,7 +1531,6 @@ class ContourMapApp {
         ctx.fillStyle = '#2c3e50';
         ctx.fillText('Triangulation', 28, 54);
 
-        // Add short edges to legend if present
         if (this.shortEdges && this.shortEdges.length > 0) {
             ctx.strokeStyle = '#f39c12';
             ctx.lineWidth = 2;
@@ -1621,12 +1551,13 @@ class ContourMapApp {
         btn.textContent = 'Fetching elevations...';
 
         try {
-            // Generate sample points
-            const totalSamples = parseInt(document.getElementById('pane-total-samples').value);
+            // Use the points already generated by the preview (so what you see is what gets sampled)
+            if (!this.samples || this.samples.length === 0) {
+                const totalSamples = parseInt(document.getElementById('pane-total-samples').value);
+                this.samples = this.generateSamplePoints(totalSamples);
+            }
 
-            this.samples = this.generateSamplePoints(totalSamples);
-
-            console.log(`Generated ${this.samples.length} total sample points`);
+            console.log(`Using ${this.samples.length} total sample points`);
             console.log(`  - ${this.numBoundaryPoints} boundary points`);
             console.log(`  - ${this.samples.length - this.numBoundaryPoints} interior points`);
 
