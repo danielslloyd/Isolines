@@ -10,9 +10,8 @@
     const CIV_PER_HOUSE = 5;
 
     class Game {
-        constructor(canvas) {
-            this.canvas = canvas;
-            this.ctx = canvas.getContext('2d');
+        constructor() {
+            this.renderer = null;   // set by the UI once the 3D scene exists
             this.state = 'menu';
             this.difficulty = 'normal';
             this.speed = 1;
@@ -36,7 +35,6 @@
             this.seed = F.hashSeed(seedStr);
             this.rng = F.mulberry32(this.seed ^ 0xabcdef);
             this.terrain = new F.Terrain(this.seed);
-            this.terrainCanvas = this.terrain.renderToCanvas();
             this.forts = new F.FortManager(this);
             this.flow = new F.FlowField(this);
 
@@ -66,34 +64,15 @@
 
             this.placeVillage();
             this.flow.recompute();
-            this.message('A new land. Wall in your keep before the raiders come.', 'good');
+            this.message('A sheltered ravine. Wall off its mouth before the raiders come.', 'good');
             this.emit('state');
+            this.emit('newmap');
         }
 
-        /** Find a broad, gentle, dry site for the village. */
+        /** The keep sits at the heart of the box canyon. */
         placeVillage() {
-            const t = this.terrain;
-            let best = null, bestScore = -Infinity;
-            const cx = F.GRID_W / 2, cy = F.GRID_H / 2;
-            for (let gy = 24; gy < F.GRID_H - 24; gy += 3) {
-                for (let gx = 30; gx < F.GRID_W - 30; gx += 3) {
-                    if (t.isWater(gx, gy)) continue;
-                    let slopeSum = 0, water = 0, n = 0;
-                    for (let dy = -6; dy <= 6; dy += 2) {
-                        for (let dx = -6; dx <= 6; dx += 2) {
-                            if (!F.inGrid(gx + dx, gy + dy)) continue;
-                            slopeSum += t.slopeAtCell(gx + dx, gy + dy);
-                            if (t.isWater(gx + dx, gy + dy)) water++;
-                            n++;
-                        }
-                    }
-                    const centerDist = Math.hypot(gx - cx, gy - cy);
-                    const score = -(slopeSum / n) * 30 - water * 3 - centerDist * 0.12
-                        + t.heightAtCell(gx, gy) * 0.05;
-                    if (score > bestScore) { bestScore = score; best = [gx, gy]; }
-                }
-            }
-            const [kx, ky] = best;
+            const bowl = this.terrain.bowl;
+            const kx = Math.round(bowl.x), ky = Math.round(bowl.z);
             this.addBuilding('keep', kx, ky, KEEP_HP);
             this.growVillage(4);
         }
@@ -103,46 +82,63 @@
                 kind, gx, gy,
                 x: F.cellCx(gx), y: F.cellCy(gy),
                 hp, maxHp: hp,
-                civilians: kind === 'house' ? CIV_PER_HOUSE : CIV_PER_HOUSE * 2
+                footprint: kind === 'keep' ? 2 : 1,   // half-extent in cells
+                attackR: kind === 'keep' ? 3.6 : 2.6, // melee reach to strike it
+                civilians: kind === 'house' ? CIV_PER_HOUSE : CIV_PER_HOUSE * 2,
+                rot: this.rng() * Math.PI * 2
             };
             this.buildings.push(b);
-            this.buildingGrid[F.idx(gx, gy)] = this.buildings.length; // 1-based
+            const id = this.buildings.length; // 1-based
+            const fp = b.footprint;
+            for (let dy = -fp; dy <= fp; dy++) {
+                for (let dx = -fp; dx <= fp; dx++) {
+                    if (F.inGrid(gx + dx, gy + dy)) {
+                        this.buildingGrid[F.idx(gx + dx, gy + dy)] = id;
+                    }
+                }
+            }
             return b;
         }
 
         buildingAt(gx, gy) {
             if (!F.inGrid(gx, gy)) return null;
             const i = this.buildingGrid[F.idx(gx, gy)];
-            return i ? this.buildings[i - 1] : null;
+            if (!i) return null;
+            const b = this.buildings[i - 1];
+            return b.hp > 0 ? b : null;
         }
 
         /** Add houses in an expanding ring around the keep. */
         growVillage(count) {
             const keep = this.buildings[0];
             const t = this.terrain;
-            const baseR = 4 + this.level * 1.6;
+            const baseR = 7 + this.level * 3.2;
             let placed = 0, tries = 0;
-            while (placed < count && tries < 800) {
+            while (placed < count && tries < 1200) {
                 tries++;
                 const ang = this.rng() * Math.PI * 2;
-                const r = baseR + this.rng() * 4;
+                const r = baseR + this.rng() * (5 + this.level);
                 const gx = Math.round(keep.gx + Math.cos(ang) * r);
-                const gy = Math.round(keep.gy + Math.sin(ang) * r * 0.8);
-                if (!F.inGrid(gx, gy) || gx < 6 || gy < 6 || gx > F.GRID_W - 7 || gy > F.GRID_H - 7) continue;
-                if (t.isWater(gx, gy) || t.slopeAtCell(gx, gy) > 0.9) continue;
+                const gy = Math.round(keep.gy + Math.sin(ang) * r * 0.85);
+                if (!F.inGrid(gx, gy) || gx < 5 || gy < 5 || gx > F.GRID_W - 6 || gy > F.GRID_H - 6) continue;
+                if (t.slopeAtCell(gx, gy) > 0.45) continue;
                 if (this.buildingAt(gx, gy) || this.forts.pieceAt(gx, gy) || this.forts.towerAt(gx, gy)) continue;
-                // keep a one-cell gap between houses
-                let crowded = false;
-                for (let dy = -1; dy <= 1 && !crowded; dy++) {
-                    for (let dx = -1; dx <= 1; dx++) {
-                        if (this.buildingAt(gx + dx, gy + dy)) { crowded = true; break; }
+                let blocked = false;
+                for (let dy = -3; dy <= 3 && !blocked; dy++) {
+                    for (let dx = -3; dx <= 3; dx++) {
+                        if (this.buildingAt(gx + dx, gy + dy) ||
+                            this.forts.pieceAt(gx + dx, gy + dy) ||
+                            (Math.abs(dx) <= 1 && Math.abs(dy) <= 1 && t.cliff[F.idx(F.clamp(gx + dx, 0, F.GRID_W - 1), F.clamp(gy + dy, 0, F.GRID_H - 1))])) {
+                            blocked = true; break;
+                        }
                     }
                 }
-                if (crowded) continue;
+                if (blocked) continue;
                 this.addBuilding('house', gx, gy, HOUSE_HP);
                 placed++;
             }
             this.forts.markDirty();
+            this.emit('buildings');
         }
 
         civilianStats() {
@@ -167,7 +163,8 @@
             this.cancelWallDraw();
 
             const groups = F.composeWave(this.level, this.wave);
-            const primaryEdge = Math.floor(Math.random() * 4);
+            // Early raids come up the ravine; later armies also cross the plateau.
+            const primaryEdge = this.level <= 2 ? 0 : Math.floor(Math.random() * 4);
             const secondEdge = (primaryEdge + 1 + Math.floor(Math.random() * 3)) % 4;
             this.spawnEdges = [primaryEdge];
 
@@ -186,24 +183,41 @@
                 }
             });
             this.spawnQueue.sort((a, b) => a.time - b.time);
+            // Beacon markers where the assault will enter the map.
+            this.spawnBeacons = [];
+            for (const edge of this.spawnEdges) {
+                const cell = this.findSpawnCell(edge, 0.5);
+                if (cell) this.spawnBeacons.push({ x: F.cellCx(cell[0]), y: F.cellCy(cell[1]) });
+            }
             this.message(`Wave ${this.wave} of ${F.wavesInLevel(this.level)} — they come!`, 'bad');
             this.emit('state');
         }
 
-        spawnAttacker(entry) {
-            let gx, gy;
+        /** Walkable spawn cell on the given edge: not a cliff, can reach targets. */
+        findSpawnCell(edge, along) {
             const W = F.GRID_W - 1, H = F.GRID_H - 1;
-            if (entry.edge === 0) { gx = Math.round(entry.along * W); gy = 1; }
-            else if (entry.edge === 1) { gx = W - 1; gy = Math.round(entry.along * H); }
-            else if (entry.edge === 2) { gx = Math.round(entry.along * W); gy = H - 1; }
-            else { gx = 1; gy = Math.round(entry.along * H); }
-            // avoid spawning in deep water when possible
-            for (let k = 0; k < 8 && this.terrain.isWater(gx, gy); k++) {
-                if (entry.edge === 0 || entry.edge === 2) gx = F.clamp(gx + (k + 1) * (k % 2 ? -2 : 2), 1, W - 1);
-                else gy = F.clamp(gy + (k + 1) * (k % 2 ? -2 : 2), 1, H - 1);
+            const cellAt = (a) => {
+                if (edge === 0) return [Math.round(F.clamp(a, 0.02, 0.98) * W), 2];
+                if (edge === 1) return [W - 2, Math.round(F.clamp(a, 0.02, 0.98) * H)];
+                if (edge === 2) return [Math.round(F.clamp(a, 0.02, 0.98) * W), H - 2];
+                return [2, Math.round(F.clamp(a, 0.02, 0.98) * H)];
+            };
+            for (let k = 0; k < 60; k++) {
+                const off = (k % 2 ? -1 : 1) * Math.ceil(k / 2) * 0.02;
+                const [gx, gy] = cellAt(along + off);
+                if (!this.terrain.cliff[F.idx(gx, gy)] && this.flow.dist[F.idx(gx, gy)] < Infinity) {
+                    return [gx, gy];
+                }
             }
+            return null;
+        }
+
+        spawnAttacker(entry) {
+            const cell = this.findSpawnCell(entry.edge, entry.along) ||
+                         this.findSpawnCell(0, 0.5); // ravine approach always works
+            if (!cell) return;
             const scale = F.waveScale(this.level, this.difficulty);
-            this.attackers.push(new F.Attacker(entry.type, F.cellCx(gx), F.cellCy(gy), scale));
+            this.attackers.push(new F.Attacker(entry.type, F.cellCx(cell[0]), F.cellCy(cell[1]), scale));
         }
 
         onWaveEnd() {
@@ -262,7 +276,7 @@
                     dt -= step;
                 }
             }
-            F.render(this);
+            if (this.renderer) this.renderer.render(this, raw);
             this.emit('frame');
             requestAnimationFrame(this._frame.bind(this));
         }
@@ -318,12 +332,12 @@
                 if (special === 'siegetower' && a.docked) { this.siegeTowerAct(a, dt); continue; }
 
                 // Adjacent building? Attack it.
-                const bld = this.nearestBuilding(a.x, a.y, F.CELL * 1.7);
+                const bld = this.adjacentBuilding(a.x, a.y);
                 if (bld) {
                     if (a.cooldown <= 0) {
                         a.cooldown = a.type.rate;
                         this.damageBuilding(bld, a.dmg);
-                        this.effects.push({ kind: 'hit', x: bld.x, y: bld.y, t: 0, dur: 0.2, r: 5 });
+                        this.effects.push({ kind: 'hit', x: bld.x, y: bld.y, t: 0, dur: 0.2, r: 1.3 });
                     }
                     continue;
                 }
@@ -356,7 +370,7 @@
                                 const tower = forts.towerAt(step.gx, step.gy);
                                 if (tower) forts.damageTower(tower, a.dmg * a.type.wallMult);
                             }
-                            this.effects.push({ kind: 'hit', x: tx, y: ty, t: 0, dur: 0.2, r: 4 });
+                            this.effects.push({ kind: 'hit', x: tx, y: ty, t: 0, dur: 0.2, r: 1.1 });
                         }
                         continue;
                     }
@@ -373,11 +387,11 @@
         moveToward(a, tx, ty, dt) {
             const i = F.idx(a.gx, a.gy);
             let speed = a.type.speed / (1 + F.clamp(this.terrain.slope[i], 0, 1.6) * 1.1);
-            if (this.terrain.water[i]) speed *= 0.4;
             if (this.forts.moat[i]) speed *= 0.35;
             if (a.slow > 0) speed *= 0.5;
             const d = F.dist(a.x, a.y, tx, ty);
             if (d < 0.5) return;
+            a.heading = Math.atan2(tx - a.x, ty - a.y); // yaw for the 3D renderer
             const k = Math.min(1, speed * dt / d);
             a.x += (tx - a.x) * k;
             a.y += (ty - a.y) * k;
@@ -391,7 +405,7 @@
                 st.uses--;
                 this.damageAttacker(a, 24);
                 a.slow = 2;
-                this.effects.push({ kind: 'hit', x: a.x, y: a.y, t: 0, dur: 0.25, r: 5 });
+                this.effects.push({ kind: 'hit', x: a.x, y: a.y, t: 0, dur: 0.25, r: 1.2 });
                 if (st.uses <= 0) this.forts.stakes.delete(key);
             }
         }
@@ -401,7 +415,7 @@
             const myElev = this.terrain.heightAtPx(a.x, a.y);
             let target = null, kind = null, bestD = Infinity;
             for (const t of this.forts.towers) {
-                const eff = a.type.range * (1 + Math.max(0, myElev - t.elev) * 0.012);
+                const eff = a.type.range * (1 + Math.max(0, myElev - t.elev) * 0.03);
                 const d = F.dist(a.x, a.y, t.x, t.y);
                 if (d < eff && d < bestD) { bestD = d; target = t; kind = 'tower'; }
             }
@@ -416,7 +430,7 @@
             if (a.cooldown <= 0) {
                 a.cooldown = a.type.rate;
                 const dmg = a.dmg;
-                this.projectiles.push(new F.Projectile(a.x, a.y, target.x, target.y, 220, 'arrow', (g) => {
+                this.projectiles.push(new F.Projectile(a.x, a.y, target.x, target.y, 32, 'arrow', (g) => {
                     if (kind === 'tower' && g.forts.towers.includes(target)) g.forts.damageTower(target, dmg);
                     else if (kind === 'building' && target.hp > 0) g.damageBuilding(target, dmg);
                 }));
@@ -427,7 +441,7 @@
         /** Catapults & trebuchets: bombard walls and towers from range. */
         artilleryAct(a, dt) {
             const myElev = this.terrain.heightAtPx(a.x, a.y);
-            const effRange = (t) => a.type.range * (1 + Math.max(0, myElev - t) * 0.012);
+            const effRange = (t) => a.type.range * (1 + Math.max(0, myElev - t) * 0.03);
             let target = null, bestD = Infinity;
             for (const p of this.forts.pieces.values()) {
                 const px = F.cellCx(p.gx), py = F.cellCy(p.gy);
@@ -442,12 +456,12 @@
             if (a.cooldown <= 0) {
                 a.cooldown = a.type.rate;
                 const dmg = a.dmg;
-                const scatter = 6;
+                const scatter = 1.8;
                 const tx = target.x + (Math.random() - 0.5) * scatter;
                 const ty = target.y + (Math.random() - 0.5) * scatter;
-                this.projectiles.push(new F.Projectile(a.x, a.y, tx, ty, 95, 'stone', (g, hx, hy) => {
-                    g.effects.push({ kind: 'explosion', x: hx, y: hy, t: 0, dur: 0.45, r: 13 });
-                    g.areaDamageDefenses(hx, hy, 13, dmg);
+                this.projectiles.push(new F.Projectile(a.x, a.y, tx, ty, 17, 'stone', (g, hx, hy) => {
+                    g.effects.push({ kind: 'explosion', x: hx, y: hy, t: 0, dur: 0.45, r: 3.4 });
+                    g.areaDamageDefenses(hx, hy, 3.4, dmg);
                 }));
             }
             return true;
@@ -457,7 +471,7 @@
             if (a.deployed >= 6) {
                 // Crew abandons the spent tower; it collapses.
                 a.dead = true;
-                this.effects.push({ kind: 'explosion', x: a.x, y: a.y, t: 0, dur: 0.6, r: 12 });
+                this.effects.push({ kind: 'explosion', x: a.x, y: a.y, t: 0, dur: 0.6, r: 3 });
                 return;
             }
             if (a.cooldown > 0) return;
@@ -482,14 +496,14 @@
                 const u = new F.Attacker('swordsman', F.cellCx(best[0]), F.cellCy(best[1]), scale);
                 this.attackers.push(u);
                 a.deployed++;
-                this.effects.push({ kind: 'hit', x: u.x, y: u.y, t: 0, dur: 0.3, r: 6 });
+                this.effects.push({ kind: 'hit', x: u.x, y: u.y, t: 0, dur: 0.3, r: 1.5 });
             }
         }
 
         sapperExplode(a) {
             a.dead = true;
-            this.effects.push({ kind: 'explosion', x: a.x, y: a.y, t: 0, dur: 0.6, r: 17 });
-            this.areaDamageDefenses(a.x, a.y, 15, 280);
+            this.effects.push({ kind: 'explosion', x: a.x, y: a.y, t: 0, dur: 0.6, r: 4.5 });
+            this.areaDamageDefenses(a.x, a.y, 4, 280);
         }
 
         /** Damage walls and towers in a radius (siege blasts). */
@@ -525,13 +539,28 @@
             return best;
         }
 
+        /** Building within melee reach (buildings have physical footprints). */
+        adjacentBuilding(x, y) {
+            for (const b of this.buildings) {
+                if (b.hp > 0 && F.dist(x, y, b.x, b.y) < b.attackR) return b;
+            }
+            return null;
+        }
+
         damageBuilding(b, dmg) {
             if (b.hp <= 0) return;
             b.hp -= dmg;
             if (b.hp <= 0) {
                 b.hp = 0;
-                this.buildingGrid[F.idx(b.gx, b.gy)] = 0;
-                this.effects.push({ kind: 'explosion', x: b.x, y: b.y, t: 0, dur: 0.7, r: 14 });
+                for (let dy = -b.footprint; dy <= b.footprint; dy++) {
+                    for (let dx = -b.footprint; dx <= b.footprint; dx++) {
+                        if (F.inGrid(b.gx + dx, b.gy + dy)) {
+                            this.buildingGrid[F.idx(b.gx + dx, b.gy + dy)] = 0;
+                        }
+                    }
+                }
+                this.emit('buildings');
+                this.effects.push({ kind: 'explosion', x: b.x, y: b.y, t: 0, dur: 0.7, r: 4 });
                 if (b.kind === 'keep') {
                     this.defeat();
                 } else {
@@ -549,7 +578,7 @@
                 a.dead = true;
                 this.kills++;
                 this.gold += a.type.bounty;
-                this.effects.push({ kind: 'death', x: a.x, y: a.y, t: 0, dur: 0.4, r: a.type.radius + 2 });
+                this.effects.push({ kind: 'death', x: a.x, y: a.y, t: 0, dur: 0.4, r: a.type.radius + 0.6 });
             }
         }
 
@@ -557,7 +586,7 @@
             this.effects.push({
                 kind: 'explosion',
                 x: F.cellCx(piece.gx), y: F.cellCy(piece.gy),
-                t: 0, dur: 0.5, r: 9
+                t: 0, dur: 0.5, r: 2.4
             });
             if (this.state === 'combat') this.message('Your wall is breached!', 'bad');
         }
@@ -576,7 +605,7 @@
                     if (a.dead) continue;
                     const aElev = this.terrain.heightAtPx(a.x, a.y);
                     // High ground extends reach — build on hills and walls.
-                    const eff = stats.range * (1 + Math.max(0, t.elev - aElev) * 0.015);
+                    const eff = stats.range * (1 + Math.max(0, t.elev - aElev) * 0.03);
                     const d = F.dist(t.x, t.y, a.x, a.y);
                     if (d > eff) continue;
                     // Ballistae prefer siege engines; others shoot the closest.
@@ -588,7 +617,7 @@
                 const dmg = stats.dmg, aoe = stats.aoe;
                 const tgt = target;
                 this.projectiles.push(new F.Projectile(
-                    t.x, t.y, tgt.x, tgt.y, stats.projectile === 'bolt' ? 300 : 240, stats.projectile,
+                    t.x, t.y, tgt.x, tgt.y, stats.projectile === 'bolt' ? 45 : 34, stats.projectile,
                     (g, hx, hy) => {
                         if (aoe > 0) {
                             g.effects.push({ kind: 'hit', x: hx, y: hy, t: 0, dur: 0.25, r: aoe });
@@ -598,7 +627,7 @@
                                     if (a.dead) t.kills++;
                                 }
                             }
-                        } else if (!tgt.dead && F.dist(tgt.x, tgt.y, hx, hy) < 8) {
+                        } else if (!tgt.dead && F.dist(tgt.x, tgt.y, hx, hy) < 2.2) {
                             g.damageAttacker(tgt, dmg);
                             if (tgt.dead) t.kills++;
                         }
@@ -615,13 +644,13 @@
                 const px = F.cellCx(p.gx), py = F.cellCy(p.gy);
                 let any = false;
                 for (const a of this.attackers) {
-                    if (!a.dead && F.dist(a.x, a.y, px, py) < 17) { any = true; break; }
+                    if (!a.dead && F.dist(a.x, a.y, px, py) < 4.5) { any = true; break; }
                 }
                 if (!any) continue;
                 p.oil.cooldown = 9;
-                this.effects.push({ kind: 'oil', x: px, y: py, t: 0, dur: 0.6, r: 17 });
+                this.effects.push({ kind: 'oil', x: px, y: py, t: 0, dur: 0.6, r: 4.5 });
                 for (const a of this.attackers) {
-                    if (!a.dead && F.dist(a.x, a.y, px, py) < 17 + a.type.radius) {
+                    if (!a.dead && F.dist(a.x, a.y, px, py) < 4.5 + a.type.radius) {
                         this.damageAttacker(a, 65);
                     }
                 }
@@ -655,6 +684,11 @@
         }
 
         pointerMove(x, y) {
+            // Organic snapping: wall drawing magnetizes to existing masonry.
+            if (this.tool === 'wall' || this.tool === 'gatewall') {
+                const snap = this.forts.snapPoint(x, y, 2.2);
+                if (snap) { x = snap.x; y = snap.y; }
+            }
             this.hover = { x, y, gx: F.toCell(x), gy: F.toCellY(y) };
             if (this.tool === 'wall' || this.tool === 'gatewall') {
                 if (this.wallNodes.length > 0) {
@@ -683,10 +717,12 @@
 
             switch (this.tool) {
                 case 'wall':
-                case 'gatewall':
-                    this.wallNodes.push({ x, y });
+                case 'gatewall': {
+                    const snap = this.forts.snapPoint(x, y, 2.2);
+                    this.wallNodes.push(snap ? { x: snap.x, y: snap.y } : { x, y });
                     this.pointerMove(x, y);
                     break;
+                }
                 case 'tower': this.tryPlaceTower(gx, gy); break;
                 case 'oil': this.tryPlaceOil(gx, gy); break;
                 case 'stakes': this.tryPlaceStakes(gx, gy); break;
@@ -825,7 +861,7 @@
             if (bld) { this.selected = { kind: 'building', obj: bld }; return; }
             const cx = F.cellCx(gx), cy = F.cellCy(gy);
             for (const a of this.attackers) {
-                if (!a.dead && F.dist(a.x, a.y, cx, cy) < a.type.radius + 4) {
+                if (!a.dead && F.dist(a.x, a.y, cx, cy) < a.type.radius + 1.2) {
                     this.selected = { kind: 'attacker', obj: a };
                     return;
                 }

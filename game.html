@@ -41,22 +41,21 @@
 
         #board-wrap {
             flex: 1;
-            display: flex;
-            align-items: center;
-            justify-content: center;
-            padding: 10px;
             position: relative;
             min-width: 0;
+            overflow: hidden;
         }
-        #board {
-            max-width: 100%;
-            max-height: 100%;
-            aspect-ratio: 11 / 7;
-            border: 2px solid #45586b;
-            border-radius: 4px;
-            background: #223;
+        #board-wrap3d {
+            position: absolute;
+            inset: 0;
             cursor: crosshair;
-            display: block;
+        }
+        #board-wrap3d canvas { display: block; }
+        #overlay-2d {
+            position: absolute;
+            inset: 0;
+            pointer-events: none;
+            z-index: 5;
         }
 
         #sidebar {
@@ -178,17 +177,19 @@
 
     <div id="main">
         <div id="board-wrap">
-            <canvas id="board" width="1100" height="700"></canvas>
+            <div id="board-wrap3d"></div>
+            <canvas id="overlay-2d"></canvas>
 
             <div class="overlay show" id="menu-overlay">
                 <div class="panel">
                     <h2>⚔ Hold the High Ground</h2>
                     <div class="sub">
-                        A fractal land rises before you — every hill, saddle and shore shaped by
-                        diamond-square fractal terrain, mapped in contour lines.<br><br>
-                        Draw your fortifications along the ridges: the engine blends your walls into
-                        the terrain, and height is armor. Shelter the growing village, hold against
-                        Bronze Age raiders, and endure into the age of trebuchets.
+                        A fractal ravine shelters your keep — sheer cliffs on every side, and one
+                        narrow mouth to the south.<br><br>
+                        Wall off the opening, then grow: each level the settlement spreads down the
+                        valley and up onto the plateau, and your palisade must become a citadel.
+                        Height is armor — walls on high ground shrug off blows, towers on cliff tops
+                        outrange trebuchets. Hold from the Bronze Age into the age of siege engines.
                     </div>
                     <div>
                         <input type="text" id="seed-input" placeholder="terrain seed">
@@ -229,12 +230,12 @@
                 <h3>Construction</h3>
                 <div id="tools">
                     <button class="tool-btn on" data-tool="inspect">🔍 Inspect</button>
-                    <button class="tool-btn" data-tool="wall">🧱 Draw Wall <span class="cost" id="wall-cost">4g/section</span></button>
+                    <button class="tool-btn" data-tool="wall">🧱 Draw Wall <span class="cost" id="wall-cost">4g/m</span></button>
                     <button class="tool-btn" data-tool="gatewall">🚪 Draw Gate <span class="cost">wall ×1.6</span></button>
                     <button class="tool-btn" data-tool="tower">🏹 Tower <span class="cost" id="tower-cost">110g</span></button>
                     <button class="tool-btn" data-tool="oil">🔥 Oil Cauldron <span class="cost">45g</span></button>
                     <button class="tool-btn" data-tool="stakes">⛏ Stakes <span class="cost">14g</span></button>
-                    <button class="tool-btn" data-tool="moat">🌊 Dig Moat <span class="cost">7g/cell</span></button>
+                    <button class="tool-btn" data-tool="moat">🌊 Dig Moat <span class="cost">7g/m²</span></button>
                     <button class="tool-btn" data-tool="upgrade">⬆ Upgrade Wall</button>
                     <button class="tool-btn" data-tool="repair">🔧 Repair</button>
                     <button class="tool-btn" data-tool="demolish">💥 Demolish <span class="cost">30% refund</span></button>
@@ -266,12 +267,14 @@
                 <details>
                     <summary>How to play</summary>
                     <ul>
-                        <li><b>Walls:</b> click to place points, <b>Enter</b> or double-click to build, right-click to undo, <b>Esc</b> to cancel. The engine snaps your wall onto ridges.</li>
-                        <li><b>High ground is armor:</b> walls on hills take less damage, towers on hills and walls shoot farther.</li>
-                        <li><b>Enclose houses</b> completely to protect them — circled houses are exposed. Protected civilians pay taxes each wave.</li>
+                        <li><b>Camera:</b> WASD pans, Q/E or middle-drag rotates, wheel zooms.</li>
+                        <li><b>Walls:</b> click to place points, <b>Enter</b> or double-click to build, right-click to undo, <b>Esc</b> to cancel. Walls snap onto ridges and join existing walls seamlessly.</li>
+                        <li><b>Cliffs count as walls:</b> sealing the ravine mouth protects everything inside the canyon.</li>
+                        <li><b>High ground is armor:</b> walls on hills take less damage, towers on cliffs and ramparts shoot farther.</li>
+                        <li><b>Enclose houses</b> to protect them — ⚠ marks exposed homes. Protected civilians pay taxes each wave.</li>
                         <li>Add a <b>gate</b> to a walled enclosure for +25% trade income; rams will head for it.</li>
                         <li>Attackers besiege your <b>weakest, lowest</b> stretch of wall. Watch the red circles.</li>
-                        <li>Each level the village grows outward — extend the walls, upgrade palisades to stone, stone to fortified.</li>
+                        <li>Each level the settlement grows outward — down the valley, up the ramps — so keep extending and upgrading: palisade to stone, stone to fortified citadel walls.</li>
                         <li>Eras escalate: Bronze Age raids → Iron Age rams → medieval catapults, sappers, siege towers, trebuchets.</li>
                         <li><b>Space</b> starts the next wave. You can build during a siege if enemies aren't standing on the site.</li>
                     </ul>
@@ -280,14 +283,14 @@
         </div>
     </div>
 
-    <script src="conrec.js"></script>
+    <script src="libs/three.min.js"></script>
     <script src="game/core.js"></script>
     <script src="game/terrain.js"></script>
     <script src="game/pathfinding.js"></script>
     <script src="game/walls.js"></script>
     <script src="game/units.js"></script>
     <script src="game/waves.js"></script>
-    <script src="game/render.js"></script>
+    <script src="game/render3d.js"></script>
     <script src="game/engine.js"></script>
     <script src="game/ui.js"></script>
 </body>

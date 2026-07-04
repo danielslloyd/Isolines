@@ -31,8 +31,8 @@
             const g = this.game;
             const i = F.idx(gx, gy);
             let c = 1 + F.clamp(g.terrain.slope[i], 0, 1.6) * 2.4;
-            if (g.terrain.water[i]) c *= 6;
             if (g.forts.moat[i]) c *= 5;
+            if (g.buildingAt(gx, gy)) c += 8; // discourage cutting through yards
             const piece = g.forts.pieceAt(gx, gy);
             if (piece) {
                 // Cost of fighting through this wall: HP plus terrain advantage.
@@ -47,9 +47,10 @@
             return !!(this.game.forts.pieceAt(gx, gy) || this.game.forts.towerAt(gx, gy));
         }
 
-        /** Diagonal steps may not squeeze between two solid corner cells. */
+        /** Cliffs are impassable; diagonals may not squeeze between solids. */
         canStep(fx, fy, tx, ty) {
             if (!F.inGrid(tx, ty)) return false;
+            if (this.game.terrain.cliff[F.idx(tx, ty)]) return false;
             if (fx !== tx && fy !== ty) {
                 if (this.isSolid(fx, ty) && this.isSolid(tx, fy)) return false;
             }

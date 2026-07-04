@@ -18,17 +18,18 @@
 (function () {
     const F = window.Fortress;
 
+    // Heights/ranges are metres now — intimate, football-field scale.
     F.WALL_TIERS = [
-        { name: 'Palisade',       hp: 160, height: 4,  cost: 4,  color: '#8a6a3c' },
-        { name: 'Stone Wall',     hp: 340, height: 7,  cost: 14, color: '#9a9a9c' },
-        { name: 'Fortified Wall', hp: 680, height: 10, cost: 30, color: '#c8c4bc' }
+        { name: 'Palisade',       hp: 160, height: 2.6, cost: 4,  color: 0x8a6a3c },
+        { name: 'Stone Wall',     hp: 340, height: 4.0, cost: 14, color: 0x93938f },
+        { name: 'Fortified Wall', hp: 680, height: 5.6, cost: 30, color: 0xb9b4a8 }
     ];
     F.GATE_STATS = { hpMult: 0.7, costMult: 1.6 };
 
     F.TOWER_TIERS = [
-        { name: 'Watchtower',    cost: 110, range: 88,  dmg: 10, rate: 0.85, hp: 260, aoe: 0,  projectile: 'arrow', color: '#7a5c34' },
-        { name: 'Archer Tower',  cost: 250, range: 112, dmg: 16, rate: 0.6,  hp: 420, aoe: 0,  projectile: 'arrow', color: '#8a8a8e' },
-        { name: 'Ballista Tower', cost: 520, range: 150, dmg: 52, rate: 1.7,  hp: 560, aoe: 9,  projectile: 'bolt',  color: '#b8b4aa' }
+        { name: 'Watchtower',    cost: 110, range: 26, dmg: 10, rate: 0.85, hp: 260, aoe: 0,   projectile: 'arrow', color: 0x7a5c34, h: 5 },
+        { name: 'Archer Tower',  cost: 250, range: 33, dmg: 16, rate: 0.6,  hp: 420, aoe: 0,   projectile: 'arrow', color: 0x8a8a8e, h: 7 },
+        { name: 'Ballista Tower', cost: 520, range: 44, dmg: 52, rate: 1.7,  hp: 560, aoe: 2.6, projectile: 'bolt',  color: 0xb8b4aa, h: 8.5 }
     ];
 
     F.DEFENSE_COSTS = { oil: 45, stakes: 14, moat: 7, gateExtra: 0 };
@@ -46,6 +47,8 @@
             this.moat = new Uint8Array(F.GRID_W * F.GRID_H);
             this.outside = new Uint8Array(F.GRID_W * F.GRID_H); // 1 = reachable from map edge
             this.outsideDirty = true;
+            this.walls = [];           // built wall runs: {pathPts, isGate} for 3D rendering
+            this.meshDirty = true;     // renderer rebuilds wall geometry when set
         }
 
         pieceAt(gx, gy) {
@@ -64,7 +67,7 @@
         cellBuildable(gx, gy, forWall) {
             if (!F.inGrid(gx, gy)) return false;
             const g = this.game;
-            if (g.terrain.isWater(gx, gy)) return false;
+            if (g.terrain.slopeAtCell(gx, gy) > 1.0) return false; // too steep to build
             if (this.towerGrid[F.idx(gx, gy)]) return false;
             if (g.buildingAt(gx, gy)) return false;
             if (this.moat[F.idx(gx, gy)]) return false;
@@ -72,20 +75,39 @@
             return true;
         }
 
+        /**
+         * Tiny-Glade-style snapping: pull a drawn point onto a nearby wall
+         * so new runs join existing masonry seamlessly.
+         */
+        snapPoint(x, y, radius) {
+            const r = radius || 2.5;
+            let best = null, bestD = r;
+            const g0x = F.toCell(x - r), g1x = F.toCell(x + r);
+            const g0y = F.toCellY(y - r), g1y = F.toCellY(y + r);
+            for (let gy = g0y; gy <= g1y; gy++) {
+                for (let gx = g0x; gx <= g1x; gx++) {
+                    if (!this.wallGrid[F.idx(gx, gy)]) continue;
+                    const d = F.dist(x, y, F.cellCx(gx), F.cellCy(gy));
+                    if (d < bestD) { bestD = d; best = { x: F.cellCx(gx), y: F.cellCy(gy) }; }
+                }
+            }
+            return best;
+        }
+
         /* ------------------------------------------------------------------ *
          * Terrain blending
          * ------------------------------------------------------------------ */
 
-        /** Pull a point toward the highest ground within ~2.5 cells. */
+        /** Pull a point toward the highest *buildable* ground within ~3 m. */
         blendPoint(x, y) {
             const t = this.game.terrain;
             const gx = F.toCell(x), gy = F.toCellY(y);
             let bestH = t.heightAtPx(x, y), bx = x, by = y;
-            const R = 2;
+            const R = 3;
             for (let dy = -R; dy <= R; dy++) {
                 for (let dx = -R; dx <= R; dx++) {
                     const nx = gx + dx, ny = gy + dy;
-                    if (!F.inGrid(nx, ny) || t.isWater(nx, ny)) continue;
+                    if (!F.inGrid(nx, ny) || t.slopeAtCell(nx, ny) > 1.0) continue;
                     const h = t.heightAtCell(nx, ny);
                     if (h > bestH + 0.15) {
                         bestH = h;
@@ -160,8 +182,8 @@
             const valid = cells.length > 0 && invalid === 0;
             return {
                 cells, path, cost, valid,
-                reason: invalid > 0 ? 'Path crosses water, buildings or defenses' :
-                        cells.length === 0 ? 'No new wall cells' : null
+                reason: invalid > 0 ? 'Path crosses cliffs, buildings or defenses' :
+                        cells.length === 0 ? 'No new wall footprint' : null
             };
         }
 
@@ -189,6 +211,8 @@
                 this.pieces.set(piece.id, piece);
                 this.wallGrid[F.idx(gx, gy)] = piece.id;
             }
+            // Keep the smoothed path so the renderer draws a continuous wall.
+            this.walls.push({ pathPts: plan.path.slice(), isGate: !!isGate });
             this.markDirty();
         }
 
@@ -273,7 +297,7 @@
         canPlaceTower(gx, gy) {
             if (!F.inGrid(gx, gy)) return false;
             const g = this.game;
-            if (g.terrain.isWater(gx, gy)) return false;
+            if (g.terrain.slopeAtCell(gx, gy) > 1.0) return false;
             if (this.towerGrid[F.idx(gx, gy)]) return false;
             if (g.buildingAt(gx, gy)) return false;
             if (this.moat[F.idx(gx, gy)]) return false;
@@ -290,7 +314,7 @@
                 tier, hp: stats.hp, maxHp: stats.hp,
                 cooldown: 0, kills: 0,
                 // Towers on walls fire from the rampart: extra elevation.
-                elev: baseElev + 6 + (piece ? F.WALL_TIERS[piece.tier].height : 0),
+                elev: baseElev + stats.h + (piece ? F.WALL_TIERS[piece.tier].height : 0),
                 onWall: !!piece
             };
             this.towers.push(tower);
@@ -331,6 +355,7 @@
 
         markDirty() {
             this.outsideDirty = true;
+            this.meshDirty = true;
             if (this.game.flow) this.game.flow.dirty = true;
         }
 
@@ -347,18 +372,22 @@
         recomputeOutside() {
             const W = F.GRID_W, H = F.GRID_H;
             this.outside.fill(0);
+            const cliff = this.game.terrain.cliff;
             const queue = [];
             const push = (gx, gy) => {
                 const i = F.idx(gx, gy);
-                if (this.outside[i] || this.wallGrid[i] || this.towerGrid[i]) return;
+                if (this.outside[i] || this.wallGrid[i] || this.towerGrid[i] || cliff[i]) return;
                 this.outside[i] = 1;
                 queue.push(i);
             };
             for (let gx = 0; gx < W; gx++) { push(gx, 0); push(gx, H - 1); }
             for (let gy = 0; gy < H; gy++) { push(0, gy); push(W - 1, gy); }
 
+            // Cliffs seal ground as effectively as masonry: walling off a
+            // ravine mouth protects the whole box canyon behind it.
             const solid = (gx, gy) => !F.inGrid(gx, gy) ||
-                this.wallGrid[F.idx(gx, gy)] !== 0 || this.towerGrid[F.idx(gx, gy)] !== 0;
+                this.wallGrid[F.idx(gx, gy)] !== 0 || this.towerGrid[F.idx(gx, gy)] !== 0 ||
+                cliff[F.idx(gx, gy)] !== 0;
 
             while (queue.length) {
                 const cur = queue.pop();
@@ -405,7 +434,8 @@
                             if (piece.isGate) return true;
                             continue;
                         }
-                        if (this.towerGrid[ni] || this.outside[ni]) { seen[ni] = 1; continue; }
+                        if (this.towerGrid[ni] || this.outside[ni] ||
+                            this.game.terrain.cliff[ni]) { seen[ni] = 1; continue; }
                         seen[ni] = 1;
                         queue.push(ni);
                     }

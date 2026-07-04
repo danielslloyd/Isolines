@@ -9,23 +9,40 @@ Two applications built on contour-line terrain rendering:
 
 # ⚔ Hold the High Ground (Game)
 
-Open `game.html` in a browser. No build step, no server required.
+Open `game.html` in a browser. No build step, no server — Three.js is vendored in `libs/`.
 
-A tower-defense / fortification game where **terrain is your best weapon**. Every map is generated from scratch with the **diamond-square fractal algorithm** (two blended fractal passes, seeded and reproducible), rendered with hillshading, hypsometric tints and CONREC contour lines — the same contouring engine the map creator uses.
+A **low-poly 3D fortress-defense RTS**. Every map is a fractal landform generated from
+scratch with the diamond-square algorithm: a high plateau split by a **ravine** that opens
+into a sheltered box canyon — a natural fortress roughly a football field across. Your keep
+sits in the canyon; the ravine narrows to a neck a dozen metres wide, and your first act is
+to **wall off the opening**.
 
 ## The loop
 
-1. **Build** — you're given a hilly land and a small village around your keep. Draw fortification walls with the mouse; the engine **intelligently blends the walls into the terrain**, snapping your line onto ridges and smoothing it along the landforms. Building on steep ground costs more — but height is armor.
-2. **Siege** — waves of attackers assault from the map edges. They path with a Dijkstra flow field that treats your walls as obstacles weighted by strength *and elevation*, so armies naturally converge on your **weakest, lowest** stretch of wall — exactly like real besiegers probing for a soft spot.
-3. **Grow** — each level the village grows outward, adding houses (and civilians) beyond your walls. Protected civilians pay taxes each wave; exposed ones burn. You must keep expanding and upgrading the fortifications.
+1. **Build** — draw fortifications freehand; there is no visible grid. The engine blends
+   your line into the terrain (ridge snapping, smoothing) and **snaps new walls onto
+   existing masonry**, Tiny-Glade style, so everything joins seamlessly. Walls render as
+   continuous extruded 3D curtains with battlements; breaches show as rubble gaps.
+2. **Siege** — waves pour up the ravine (and, later, across the plateau and down the
+   ramps). A Dijkstra flow field prices walls by strength *and elevation*, so armies
+   converge on your weakest, lowest point — exactly like real besiegers.
+3. **Grow** — each level the settlement spreads: down the valley, up the ramps, onto the
+   plateau. New houses land *outside* your walls, so the palisade around a canyon mouth
+   must become a citadel, then a walled city.
 
-## Terrain advantage mechanics
+## Terrain is the weapon
 
-- Walls remember their elevation; melee attackers strike **uphill walls for less damage**
-- Towers gain **range from height** — on a hill, on a wall, or both
-- Attacker artillery (catapults, trebuchets) also benefits from high ground — deny them the hills
-- Slopes slow attackers; water and moats slow them drastically
-- Pathfinding prices elevation, so a wall across a saddle is worth three on a plain
+- **Cliffs are free walls**: impassable to everyone; sealing the neck protects the whole canyon
+- Walls remember their elevation — melee attackers strike **uphill walls for less**
+- Towers gain range from height: cliff tops and ramparts are prime artillery ground
+- Enemy catapults and trebuchets also benefit from high ground — deny them the hills
+- Slopes slow attackers; moats slow them drastically
+
+## RTS camera & controls
+
+WASD pans, Q/E or middle-drag rotates, mouse wheel zooms. Click to draw walls
+(Enter/double-click builds, right-click undoes), click to place towers, oil cauldrons,
+stakes, moats; click walls to upgrade, repair, or demolish.
 
 ## Defenses
 
@@ -33,7 +50,7 @@ A tower-defense / fortification game where **terrain is your best weapon**. Ever
 |---|---|
 | Palisade → Stone → Fortified walls | Upgradable in place (whole connected runs) |
 | Gates | Weaker, attract rams — but a gated enclosure earns +25% trade income |
-| Watchtower → Archer Tower → Ballista | Place on ground or **on walls** for the height bonus; ballistae prioritize siege engines |
+| Watchtower → Archer Tower → Ballista | On ground or **on walls** for the height bonus; ballistae prioritize siege engines |
 | Oil cauldrons | Mounted on wall sections; scald attackers at the foot of the wall |
 | Stakes | Wound and slow the first attackers through |
 | Moats | Dug cell by cell; attackers wade at ⅓ speed |
@@ -41,28 +58,34 @@ A tower-defense / fortification game where **terrain is your best weapon**. Ever
 
 ## The enemy: Bronze Age → Medieval
 
-- **Bronze Age (levels 1–3):** raiders, spearmen, slingers, war chieftains
+- **Bronze Age (levels 1–3):** raiders, spearmen, slingers, war chieftains — raiding parties up the ravine
 - **Iron Age (levels 4–6):** swordsmen, archers, shieldbearers, battering rams
 - **Medieval (levels 7+):** knights, crossbowmen, sappers with demolition charges, catapults, siege towers that deploy troops over your walls, trebuchets, and the enemy warlord
 
-Waves escalate tower-defense style within each level; stats scale gently so early units stay in the mix. Difficulty settings (Easy/Normal/Hard) scale enemy strength.
+Waves escalate tower-defense style within each level. Difficulty settings (Easy/Normal/Hard) scale enemy strength.
 
-## Game engine architecture
+## Engine architecture
 
 ```
 game.html            - Game page and UI shell
+libs/three.min.js    - Three.js r128 (vendored)
 game/core.js         - Grid constants, seeded PRNG, supercover raster, binary heap
-game/terrain.js      - Diamond-square fractal generation, hillshade + CONREC contour rendering
-game/pathfinding.js  - Dijkstra flow field with soft (HP + elevation weighted) obstacles
-game/walls.js        - Wall drawing with terrain blending, tiers, gates, towers, traps, enclosure detection
+game/terrain.js      - Diamond-square fractal + ravine/box-canyon carving, cliff masking
+game/pathfinding.js  - Dijkstra flow field; soft (HP+elevation weighted) walls, hard cliffs
+game/walls.js        - Wall drawing with terrain blending & organic snapping, tiers, gates,
+                       towers, traps, enclosure detection (cliffs count as walls)
 game/units.js        - Attacker types across three eras, projectiles
 game/waves.js        - Wave composition and era progression
 game/engine.js       - Game state machine, economy, combat resolution, input tools
-game/render.js       - Layered canvas renderer
-game/ui.js           - DOM wiring, overlays, keyboard shortcuts
+game/render3d.js     - Low-poly 3D renderer: flat-shaded terrain mesh, extruded wall
+                       curtains, instanced units, RTS camera, shadows
+game/ui.js           - DOM wiring, camera controls, raycast picking, HP-bar overlay
 ```
 
-Enclosure detection flood-fills from the map border with the same movement rules attackers use, so a house is marked "protected" exactly when no attacker can walk to it.
+The simulation runs on an invisible 1 m grid; the presentation never shows it. Enclosure
+detection flood-fills from the map border with the same movement rules attackers use
+(cliffs and walls both block), so a house is "protected" exactly when no attacker can
+walk to it.
 
 ---
 

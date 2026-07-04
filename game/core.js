@@ -5,13 +5,15 @@
 (function () {
     const Fortress = window.Fortress = window.Fortress || {};
 
-    // World grid
-    Fortress.GRID_W = 220;          // cells across
-    Fortress.GRID_H = 140;          // cells down
-    Fortress.CELL = 5;              // pixels per cell
-    Fortress.CELL_M = 6;            // metres represented by one cell (for slope math)
-    Fortress.WORLD_W = Fortress.GRID_W * Fortress.CELL;   // 1100 px
-    Fortress.WORLD_H = Fortress.GRID_H * Fortress.CELL;   // 700 px
+    // World grid. Units are metres: an intimate map a couple of football
+    // fields across, simulated on an invisible 1 m grid. The player never
+    // sees the grid — walls and buildings snap together organically.
+    Fortress.GRID_W = 160;          // cells across (metres)
+    Fortress.GRID_H = 120;          // cells down (metres)
+    Fortress.CELL = 1;              // metres per cell
+    Fortress.CELL_M = 1;            // metres represented by one cell (for slope math)
+    Fortress.WORLD_W = Fortress.GRID_W * Fortress.CELL;
+    Fortress.WORLD_H = Fortress.GRID_H * Fortress.CELL;
 
     Fortress.idx = (gx, gy) => gy * Fortress.GRID_W + gx;
     Fortress.inGrid = (gx, gy) => gx >= 0 && gy >= 0 && gx < Fortress.GRID_W && gy < Fortress.GRID_H;
@@ -54,6 +56,7 @@
      * the segment touches, so diagonal walls have no gaps).
      */
     Fortress.supercoverLine = function (x0, y0, x1, y1) {
+        if (x0 === x1 && y0 === y1) return [[x0, y0]];
         const cells = [];
         let dx = Math.abs(x1 - x0), dy = Math.abs(y1 - y0);
         let x = x0, y = y0;
