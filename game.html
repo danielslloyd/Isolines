@@ -1,0 +1,294 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Isolines: Hold the High Ground</title>
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, Cantarell, sans-serif;
+            display: flex;
+            flex-direction: column;
+            height: 100vh;
+            background: #1c2530;
+            color: #e8e4da;
+            overflow: hidden;
+        }
+
+        #header {
+            background: #2c3e50;
+            padding: 10px 20px;
+            display: flex;
+            align-items: center;
+            gap: 18px;
+            box-shadow: 0 2px 4px rgba(0,0,0,0.3);
+            flex-shrink: 0;
+        }
+        #header h1 { font-size: 19px; font-weight: 600; color: #fff; }
+        #header a { color: #8fc1e8; font-size: 13px; text-decoration: none; }
+        #header a:hover { text-decoration: underline; }
+        #header .spacer { flex: 1; }
+
+        .statbar { display: flex; gap: 14px; font-size: 14px; align-items: center; }
+        .statbar .stat { background: rgba(0,0,0,0.25); padding: 4px 10px; border-radius: 4px; white-space: nowrap; }
+        .statbar .stat b { color: #f2d24a; }
+        .statbar .stat.era b { color: #8fc1e8; }
+        .statbar .stat.civ b { color: #9df29d; }
+
+        #main { display: flex; flex: 1; overflow: hidden; }
+
+        #board-wrap {
+            flex: 1;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            padding: 10px;
+            position: relative;
+            min-width: 0;
+        }
+        #board {
+            max-width: 100%;
+            max-height: 100%;
+            aspect-ratio: 11 / 7;
+            border: 2px solid #45586b;
+            border-radius: 4px;
+            background: #223;
+            cursor: crosshair;
+            display: block;
+        }
+
+        #sidebar {
+            width: 312px;
+            flex-shrink: 0;
+            background: #26313d;
+            border-left: 1px solid #3a4a5a;
+            display: flex;
+            flex-direction: column;
+            overflow-y: auto;
+        }
+        .side-section { padding: 12px 14px; border-bottom: 1px solid #34424f; }
+        .side-section h3 {
+            font-size: 11px; text-transform: uppercase; letter-spacing: 0.08em;
+            color: #8fa3b8; margin-bottom: 8px; font-weight: 600;
+        }
+
+        .big-btn {
+            width: 100%; padding: 11px; border: none; border-radius: 5px;
+            font-size: 15px; font-weight: 700; cursor: pointer;
+            background: #c0392b; color: #fff; transition: background 0.15s;
+        }
+        .big-btn:hover { background: #a93226; }
+        .big-btn:disabled { background: #55606a; cursor: not-allowed; }
+        .big-btn.building { background: #27ae60; }
+        .big-btn.building:hover { background: #229954; }
+
+        .row { display: flex; gap: 6px; margin-top: 8px; }
+        .row button {
+            flex: 1; padding: 6px 4px; border: 1px solid #45586b; border-radius: 4px;
+            background: #2f3d4b; color: #cfd8e0; font-size: 12px; cursor: pointer;
+        }
+        .row button:hover { background: #3a4a5a; }
+        .row button.on { background: #3498db; border-color: #3498db; color: #fff; }
+
+        #tools { display: grid; grid-template-columns: 1fr 1fr; gap: 6px; }
+        .tool-btn {
+            padding: 8px 6px; border: 1px solid #45586b; border-radius: 5px;
+            background: #2f3d4b; color: #dfe6ec; font-size: 12.5px; cursor: pointer;
+            text-align: left; line-height: 1.25;
+        }
+        .tool-btn:hover { background: #3a4a5a; }
+        .tool-btn.on { background: #2d6a9c; border-color: #3498db; }
+        .tool-btn .cost { color: #f2d24a; font-size: 11px; display: block; }
+
+        .tier-row { display: none; }
+        .tier-row.show { display: flex; }
+
+        #wave-preview {
+            font-size: 12px; color: #cfd8e0; background: rgba(0,0,0,0.22);
+            padding: 8px; border-radius: 4px; line-height: 1.45; margin-top: 8px;
+        }
+        #wave-preview b { color: #f2a09d; }
+
+        #info-panel {
+            font-size: 12px; line-height: 1.5; color: #cfd8e0;
+            background: rgba(0,0,0,0.22); padding: 8px; border-radius: 4px;
+            min-height: 74px;
+        }
+        #info-panel b { color: #fff; }
+
+        #log { font-size: 12px; line-height: 1.55; max-height: 148px; overflow-y: auto; }
+        #log .good { color: #9df29d; }
+        #log .bad { color: #f2a09d; }
+        #log div { margin-bottom: 2px; }
+
+        .hint { font-size: 11px; color: #8fa3b8; margin-top: 6px; line-height: 1.45; }
+
+        /* Overlays */
+        .overlay {
+            position: absolute; inset: 0; display: none;
+            align-items: center; justify-content: center;
+            background: rgba(12, 18, 26, 0.82); z-index: 20;
+        }
+        .overlay.show { display: flex; }
+        .overlay .panel {
+            background: #26313d; border: 1px solid #45586b; border-radius: 8px;
+            padding: 28px 34px; max-width: 520px; text-align: center;
+            box-shadow: 0 12px 40px rgba(0,0,0,0.5);
+        }
+        .overlay h2 { font-size: 24px; margin-bottom: 6px; color: #fff; }
+        .overlay .sub { color: #9fb2c4; font-size: 13.5px; line-height: 1.55; margin-bottom: 16px; }
+        .overlay input[type=text] {
+            padding: 8px 10px; border-radius: 4px; border: 1px solid #45586b;
+            background: #1c2530; color: #fff; font-size: 14px; width: 170px; text-align: center;
+        }
+        .overlay .panel .big-btn { margin-top: 14px; background: #27ae60; }
+        .overlay .panel .big-btn:hover { background: #229954; }
+        .overlay .ghost-btn {
+            margin-top: 8px; width: 100%; padding: 9px; border-radius: 5px;
+            border: 1px solid #45586b; background: transparent; color: #cfd8e0;
+            font-size: 13px; cursor: pointer;
+        }
+        .overlay .ghost-btn:hover { background: #2f3d4b; }
+        .diff-row { display: flex; gap: 8px; justify-content: center; margin: 12px 0 4px; }
+        .diff-row button {
+            padding: 7px 16px; border-radius: 4px; border: 1px solid #45586b;
+            background: #2f3d4b; color: #cfd8e0; cursor: pointer; font-size: 13px;
+        }
+        .diff-row button.on { background: #3498db; border-color: #3498db; color: #fff; }
+
+        details { font-size: 12px; color: #b8c4d0; }
+        details summary { cursor: pointer; color: #8fc1e8; font-size: 12px; margin-bottom: 6px; }
+        details li { margin: 3px 0 3px 16px; line-height: 1.4; }
+    </style>
+</head>
+<body>
+    <div id="header">
+        <h1>⚔ Hold the High Ground</h1>
+        <a href="index.html">← Contour Map Creator</a>
+        <div class="spacer"></div>
+        <div class="statbar">
+            <div class="stat">Gold <b id="st-gold">0</b></div>
+            <div class="stat era">Level <b id="st-level">1</b> · <b id="st-era">Bronze Age</b></div>
+            <div class="stat">Wave <b id="st-wave">1/3</b></div>
+            <div class="stat civ">Civilians <b id="st-civ">0/0</b></div>
+        </div>
+    </div>
+
+    <div id="main">
+        <div id="board-wrap">
+            <canvas id="board" width="1100" height="700"></canvas>
+
+            <div class="overlay show" id="menu-overlay">
+                <div class="panel">
+                    <h2>⚔ Hold the High Ground</h2>
+                    <div class="sub">
+                        A fractal land rises before you — every hill, saddle and shore shaped by
+                        diamond-square fractal terrain, mapped in contour lines.<br><br>
+                        Draw your fortifications along the ridges: the engine blends your walls into
+                        the terrain, and height is armor. Shelter the growing village, hold against
+                        Bronze Age raiders, and endure into the age of trebuchets.
+                    </div>
+                    <div>
+                        <input type="text" id="seed-input" placeholder="terrain seed">
+                        <button class="ghost-btn" id="regen-btn" style="width:auto;display:inline-block;margin:0 0 0 8px;padding:8px 14px;">🎲 New land</button>
+                    </div>
+                    <div class="diff-row" id="diff-row">
+                        <button data-d="easy">Easy</button>
+                        <button data-d="normal" class="on">Normal</button>
+                        <button data-d="hard">Hard</button>
+                    </div>
+                    <button class="big-btn" id="begin-btn">Begin the Defense</button>
+                </div>
+            </div>
+
+            <div class="overlay" id="over-overlay">
+                <div class="panel">
+                    <h2 id="over-title">The Keep Has Fallen</h2>
+                    <div class="sub" id="over-stats"></div>
+                    <button class="big-btn" id="retry-btn">Retry This Land</button>
+                    <button class="ghost-btn" id="newland-btn">New Land</button>
+                </div>
+            </div>
+        </div>
+
+        <div id="sidebar">
+            <div class="side-section">
+                <button class="big-btn" id="wave-btn">⚔ Start Wave</button>
+                <div class="row">
+                    <button id="speed-1" class="on">1×</button>
+                    <button id="speed-2">2×</button>
+                    <button id="speed-3">3×</button>
+                    <button id="pause-btn">⏸</button>
+                </div>
+                <div id="wave-preview"></div>
+            </div>
+
+            <div class="side-section">
+                <h3>Construction</h3>
+                <div id="tools">
+                    <button class="tool-btn on" data-tool="inspect">🔍 Inspect</button>
+                    <button class="tool-btn" data-tool="wall">🧱 Draw Wall <span class="cost" id="wall-cost">4g/section</span></button>
+                    <button class="tool-btn" data-tool="gatewall">🚪 Draw Gate <span class="cost">wall ×1.6</span></button>
+                    <button class="tool-btn" data-tool="tower">🏹 Tower <span class="cost" id="tower-cost">110g</span></button>
+                    <button class="tool-btn" data-tool="oil">🔥 Oil Cauldron <span class="cost">45g</span></button>
+                    <button class="tool-btn" data-tool="stakes">⛏ Stakes <span class="cost">14g</span></button>
+                    <button class="tool-btn" data-tool="moat">🌊 Dig Moat <span class="cost">7g/cell</span></button>
+                    <button class="tool-btn" data-tool="upgrade">⬆ Upgrade Wall</button>
+                    <button class="tool-btn" data-tool="repair">🔧 Repair</button>
+                    <button class="tool-btn" data-tool="demolish">💥 Demolish <span class="cost">30% refund</span></button>
+                </div>
+                <div class="row tier-row" id="wall-tiers">
+                    <button data-t="0" class="on">Palisade</button>
+                    <button data-t="1">Stone</button>
+                    <button data-t="2">Fortified</button>
+                </div>
+                <div class="row tier-row" id="tower-tiers">
+                    <button data-t="0" class="on">Watch</button>
+                    <button data-t="1">Archer</button>
+                    <button data-t="2">Ballista</button>
+                </div>
+                <div class="hint" id="tool-hint">Click terrain or units to inspect them.</div>
+            </div>
+
+            <div class="side-section">
+                <h3>Field Report</h3>
+                <div id="info-panel">Hover the map…</div>
+            </div>
+
+            <div class="side-section">
+                <h3>Chronicle</h3>
+                <div id="log"></div>
+            </div>
+
+            <div class="side-section">
+                <details>
+                    <summary>How to play</summary>
+                    <ul>
+                        <li><b>Walls:</b> click to place points, <b>Enter</b> or double-click to build, right-click to undo, <b>Esc</b> to cancel. The engine snaps your wall onto ridges.</li>
+                        <li><b>High ground is armor:</b> walls on hills take less damage, towers on hills and walls shoot farther.</li>
+                        <li><b>Enclose houses</b> completely to protect them — circled houses are exposed. Protected civilians pay taxes each wave.</li>
+                        <li>Add a <b>gate</b> to a walled enclosure for +25% trade income; rams will head for it.</li>
+                        <li>Attackers besiege your <b>weakest, lowest</b> stretch of wall. Watch the red circles.</li>
+                        <li>Each level the village grows outward — extend the walls, upgrade palisades to stone, stone to fortified.</li>
+                        <li>Eras escalate: Bronze Age raids → Iron Age rams → medieval catapults, sappers, siege towers, trebuchets.</li>
+                        <li><b>Space</b> starts the next wave. You can build during a siege if enemies aren't standing on the site.</li>
+                    </ul>
+                </details>
+            </div>
+        </div>
+    </div>
+
+    <script src="conrec.js"></script>
+    <script src="game/core.js"></script>
+    <script src="game/terrain.js"></script>
+    <script src="game/pathfinding.js"></script>
+    <script src="game/walls.js"></script>
+    <script src="game/units.js"></script>
+    <script src="game/waves.js"></script>
+    <script src="game/render.js"></script>
+    <script src="game/engine.js"></script>
+    <script src="game/ui.js"></script>
+</body>
+</html>

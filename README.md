@@ -1,3 +1,71 @@
+# Isolines
+
+Two applications built on contour-line terrain rendering:
+
+1. **Contour Map Creator** (`index.html`) — generate topographic contour maps from real elevation data
+2. **⚔ Hold the High Ground** (`game.html`) — a terrain-driven fortress defense game on procedurally generated fractal terrain
+
+---
+
+# ⚔ Hold the High Ground (Game)
+
+Open `game.html` in a browser. No build step, no server required.
+
+A tower-defense / fortification game where **terrain is your best weapon**. Every map is generated from scratch with the **diamond-square fractal algorithm** (two blended fractal passes, seeded and reproducible), rendered with hillshading, hypsometric tints and CONREC contour lines — the same contouring engine the map creator uses.
+
+## The loop
+
+1. **Build** — you're given a hilly land and a small village around your keep. Draw fortification walls with the mouse; the engine **intelligently blends the walls into the terrain**, snapping your line onto ridges and smoothing it along the landforms. Building on steep ground costs more — but height is armor.
+2. **Siege** — waves of attackers assault from the map edges. They path with a Dijkstra flow field that treats your walls as obstacles weighted by strength *and elevation*, so armies naturally converge on your **weakest, lowest** stretch of wall — exactly like real besiegers probing for a soft spot.
+3. **Grow** — each level the village grows outward, adding houses (and civilians) beyond your walls. Protected civilians pay taxes each wave; exposed ones burn. You must keep expanding and upgrading the fortifications.
+
+## Terrain advantage mechanics
+
+- Walls remember their elevation; melee attackers strike **uphill walls for less damage**
+- Towers gain **range from height** — on a hill, on a wall, or both
+- Attacker artillery (catapults, trebuchets) also benefits from high ground — deny them the hills
+- Slopes slow attackers; water and moats slow them drastically
+- Pathfinding prices elevation, so a wall across a saddle is worth three on a plain
+
+## Defenses
+
+| Defense | Notes |
+|---|---|
+| Palisade → Stone → Fortified walls | Upgradable in place (whole connected runs) |
+| Gates | Weaker, attract rams — but a gated enclosure earns +25% trade income |
+| Watchtower → Archer Tower → Ballista | Place on ground or **on walls** for the height bonus; ballistae prioritize siege engines |
+| Oil cauldrons | Mounted on wall sections; scald attackers at the foot of the wall |
+| Stakes | Wound and slow the first attackers through |
+| Moats | Dug cell by cell; attackers wade at ⅓ speed |
+| Repair / Demolish | Fix damaged runs, or reclaim 30% of cost |
+
+## The enemy: Bronze Age → Medieval
+
+- **Bronze Age (levels 1–3):** raiders, spearmen, slingers, war chieftains
+- **Iron Age (levels 4–6):** swordsmen, archers, shieldbearers, battering rams
+- **Medieval (levels 7+):** knights, crossbowmen, sappers with demolition charges, catapults, siege towers that deploy troops over your walls, trebuchets, and the enemy warlord
+
+Waves escalate tower-defense style within each level; stats scale gently so early units stay in the mix. Difficulty settings (Easy/Normal/Hard) scale enemy strength.
+
+## Game engine architecture
+
+```
+game.html            - Game page and UI shell
+game/core.js         - Grid constants, seeded PRNG, supercover raster, binary heap
+game/terrain.js      - Diamond-square fractal generation, hillshade + CONREC contour rendering
+game/pathfinding.js  - Dijkstra flow field with soft (HP + elevation weighted) obstacles
+game/walls.js        - Wall drawing with terrain blending, tiers, gates, towers, traps, enclosure detection
+game/units.js        - Attacker types across three eras, projectiles
+game/waves.js        - Wave composition and era progression
+game/engine.js       - Game state machine, economy, combat resolution, input tools
+game/render.js       - Layered canvas renderer
+game/ui.js           - DOM wiring, overlays, keyboard shortcuts
+```
+
+Enclosure detection flood-fills from the map border with the same movement rules attackers use, so a house is marked "protected" exactly when no attacker can walk to it.
+
+---
+
 # Contour Map Creator
 
 A web-based application for generating topographic contour maps from elevation data using intelligent sampling and advanced algorithms.
