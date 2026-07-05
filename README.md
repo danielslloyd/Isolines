@@ -69,6 +69,7 @@ Waves escalate tower-defense style within each level. Difficulty settings (Easy/
 ```
 game.html            - Game page and UI shell
 libs/three.min.js    - Three.js r128 (vendored)
+libs/d3-delaunay.min.js - Delaunay/Voronoi for the organic terrain mesh (vendored)
 game/core.js         - Grid constants, seeded PRNG, supercover raster, binary heap
 game/terrain.js      - Diamond-square fractal + ravine/box-canyon carving, cliff masking
 game/pathfinding.js  - Dijkstra flow field; soft (HP+elevation weighted) walls, hard cliffs
@@ -77,12 +78,18 @@ game/walls.js        - Wall drawing with terrain blending & organic snapping, ti
 game/units.js        - Attacker types across three eras, projectiles
 game/waves.js        - Wave composition and era progression
 game/engine.js       - Game state machine, economy, combat resolution, input tools
-game/render3d.js     - Low-poly 3D renderer: flat-shaded terrain mesh, extruded wall
-                       curtains, instanced units, RTS camera, shadows
+game/render3d.js     - Low-poly 3D renderer: organic terrain surface (Lloyd-relaxed
+                       point set + Delaunay triangulation, densified along cliffs),
+                       extruded wall curtains, instanced units, RTS camera, shadows
 game/ui.js           - DOM wiring, camera controls, raycast picking, HP-bar overlay
 ```
 
-The simulation runs on an invisible 1 m grid; the presentation never shows it. Enclosure
+The visible terrain has no rectangular lattice: a seeded point cloud is evened out
+with two rounds of Lloyd relaxation (centroidal Voronoi), extra points are seeded
+along steep ground so cliff faces stay crisp, and the set is Delaunay-triangulated
+into irregular flat-shaded facets. The simulation runs on an invisible 1 m grid
+underneath purely as a navigation/enclosure acceleration structure; the presentation
+never shows it. Enclosure
 detection flood-fills from the map border with the same movement rules attackers use
 (cliffs and walls both block), so a house is "protected" exactly when no attacker can
 walk to it.

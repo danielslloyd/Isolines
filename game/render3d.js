@@ -192,35 +192,72 @@
             return c;
         }
 
+        /**
+         * Organic terrain surface: a seeded point set evened out with Lloyd
+         * relaxation (centroidal Voronoi), densified along cliffs, then
+         * Delaunay-triangulated. No rectangular lattice anywhere in view —
+         * every facet is irregular.
+         */
         buildTerrain(t) {
-            const STEP = 2; // 2 m facets: chunky low-poly
-            const gb = new GeomBuilder();
-            const nx = F.WORLD_W / STEP, nz = F.WORLD_H / STEP;
-            const hAt = (x, z) => t.heightAtPx(x, z);
-            const hash = (a, b) => {
-                let n = Math.imul(a + 374761393, 668265263) ^ Math.imul(b + 1442695041, 2246822519);
-                n = Math.imul(n ^ (n >>> 13), 3266489917);
-                return ((n ^ (n >>> 16)) >>> 0) / 4294967296;
-            };
-            for (let iz = 0; iz < nz; iz++) {
-                for (let ix = 0; ix < nx; ix++) {
-                    const x0 = ix * STEP, z0 = iz * STEP;
-                    const x1 = x0 + STEP, z1 = z0 + STEP;
-                    const p00 = [x0, hAt(x0, z0), z0];
-                    const p10 = [x1, hAt(x1, z0), z0];
-                    const p11 = [x1, hAt(x1, z1), z1];
-                    const p01 = [x0, hAt(x0, z1), z1];
-                    const cA = this.terrainColor(t, (x0 + x1) / 2 - STEP / 4, (z0 + z1) / 2 - STEP / 4, hash(ix * 2, iz * 2));
-                    const cB = this.terrainColor(t, (x0 + x1) / 2 + STEP / 4, (z0 + z1) / 2 + STEP / 4, hash(ix * 2 + 1, iz * 2 + 1));
-                    // alternate the diagonal for a more organic triangulation
-                    if ((ix + iz) % 2 === 0) {
-                        gb.tri(p00, p11, p10, cA);
-                        gb.tri(p00, p01, p11, cB);
-                    } else {
-                        gb.tri(p00, p01, p10, cA);
-                        gb.tri(p10, p01, p11, cB);
+            const W = F.WORLD_W, H = F.WORLD_H;
+            const rng = F.mulberry32(this.game.seed ^ 0x0b5e55ed);
+
+            // 1. Seeded random interior points
+            const pts = [];
+            const BASE = 5200;
+            for (let i = 0; i < BASE; i++) {
+                pts.push([1.5 + rng() * (W - 3), 1.5 + rng() * (H - 3)]);
+            }
+
+            // 2. Lloyd relaxation: move each point to its Voronoi cell centroid
+            for (let iter = 0; iter < 2; iter++) {
+                const vor = d3.Delaunay.from(pts).voronoi([0.5, 0.5, W - 0.5, H - 0.5]);
+                for (let i = 0; i < pts.length; i++) {
+                    const poly = vor.cellPolygon(i);
+                    if (!poly) continue;
+                    let cx = 0, cz = 0, area = 0;
+                    for (let k = 0; k < poly.length - 1; k++) {
+                        const cross = poly[k][0] * poly[k + 1][1] - poly[k + 1][0] * poly[k][1];
+                        area += cross;
+                        cx += (poly[k][0] + poly[k + 1][0]) * cross;
+                        cz += (poly[k][1] + poly[k + 1][1]) * cross;
+                    }
+                    if (Math.abs(area) > 1e-9) {
+                        pts[i] = [cx / (3 * area), cz / (3 * area)];
                     }
                 }
+            }
+
+            // 3. Densify where the land is steep so cliff faces stay crisp
+            let added = 0, tries = 0;
+            while (added < 2400 && tries < 30000) {
+                tries++;
+                const x = 1 + rng() * (W - 2), z = 1 + rng() * (H - 2);
+                if (t.slopeAtCell(F.toCell(x), F.toCellY(z)) > 0.7) {
+                    pts.push([x, z]);
+                    added++;
+                }
+            }
+
+            // 4. Boundary ring so the hull stays rectangular
+            for (let x = 0; x <= W; x += 2.5) { pts.push([x, 0], [x, H]); }
+            for (let z = 2.5; z < H; z += 2.5) { pts.push([0, z], [W, z]); }
+
+            // 5. Triangulate and emit flat-shaded facets
+            const del = d3.Delaunay.from(pts);
+            const gb = new GeomBuilder();
+            const tris = del.triangles;
+            for (let i = 0; i < tris.length; i += 3) {
+                const a = pts[tris[i]], b = pts[tris[i + 1]], c = pts[tris[i + 2]];
+                const cx = (a[0] + b[0] + c[0]) / 3, cz = (a[1] + b[1] + c[1]) / 3;
+                const col = this.terrainColor(t, cx, cz, rng());
+                // Delaunay triangles are CCW in x/z; emit with +y winding
+                gb.tri(
+                    [a[0], t.heightAtPx(a[0], a[1]), a[1]],
+                    [c[0], t.heightAtPx(c[0], c[1]), c[1]],
+                    [b[0], t.heightAtPx(b[0], b[1]), b[1]],
+                    col
+                );
             }
             const mesh = new THREE.Mesh(gb.build(), flatMat());
             mesh.receiveShadow = true;
