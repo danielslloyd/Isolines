@@ -5,9 +5,7 @@
 (function () {
     const F = window.Fortress;
 
-    const KEEP_HP = 2400;
-    const HOUSE_HP = 380;
-    const CIV_PER_HOUSE = 5;
+    const B = () => F.CONFIG.balance;
 
     class Game {
         constructor() {
@@ -45,7 +43,7 @@
             this.effects = [];
             this.messages = [];
 
-            this.gold = 850;
+            this.gold = B().startGold;
             this.level = 1;
             this.wave = 1;
             this.civiliansLost = 0;
@@ -73,7 +71,7 @@
         placeVillage() {
             const bowl = this.terrain.bowl;
             const kx = Math.round(bowl.x), ky = Math.round(bowl.z);
-            this.addBuilding('keep', kx, ky, KEEP_HP);
+            this.addBuilding('keep', kx, ky, B().keepHp);
             this.growVillage(4);
         }
 
@@ -84,7 +82,7 @@
                 hp, maxHp: hp,
                 footprint: kind === 'keep' ? 2 : 1,   // half-extent in cells
                 attackR: kind === 'keep' ? 3.6 : 2.6, // melee reach to strike it
-                civilians: kind === 'house' ? CIV_PER_HOUSE : CIV_PER_HOUSE * 2,
+                civilians: kind === 'house' ? B().civPerHouse : B().civPerHouse * 2,
                 rot: this.rng() * Math.PI * 2
             };
             this.buildings.push(b);
@@ -134,7 +132,7 @@
                     }
                 }
                 if (blocked) continue;
-                this.addBuilding('house', gx, gy, HOUSE_HP);
+                this.addBuilding('house', gx, gy, B().houseHp);
                 placed++;
             }
             this.forts.markDirty();
@@ -221,12 +219,14 @@
         }
 
         onWaveEnd() {
+            const b = B();
             const civ = this.civilianStats();
-            let income = 55 + this.level * 12 + civ.protected * 4;
+            let income = b.incomeBase + this.level * b.incomePerLevel + civ.protected * b.incomePerCivilian;
             const keep = this.buildings[0];
             if (this.forts.enclosureHasGate(keep.gx, keep.gy)) {
-                income = Math.round(income * 1.25);
-                this.message('Trade flows through your gate: +25% income.', 'good');
+                income = Math.round(income * b.gateIncomeMult);
+                const pct = Math.round((b.gateIncomeMult - 1) * 100);
+                this.message(`Trade flows through your gate: +${pct}% income.`, 'good');
             }
             this.gold += income;
             this.message(`Wave repelled! +${income} gold. ${civ.protected}/${civ.total} civilians behind walls.`, 'good');
@@ -243,9 +243,10 @@
         levelUp() {
             this.level++;
             this.wave = 1;
-            const grant = 160 + this.level * 55;
+            const b = B();
+            const grant = b.levelGrantBase + this.level * b.levelGrantPerLevel;
             this.gold += grant;
-            const newHouses = 2 + Math.floor(this.level / 2);
+            const newHouses = b.housesPerLevelBase + Math.floor(this.level / 2);
             const prevEra = F.eraForLevel(this.level - 1);
             const era = F.eraForLevel(this.level);
             this.growVillage(newHouses);
@@ -307,7 +308,7 @@
 
         /** Melee damage falls off when striking up at a raised wall. */
         meleeMult(attacker, piece) {
-            const rate = attacker.type.special === 'ram' ? 0.02 : 0.05;
+            const rate = attacker.type.special === 'ram' ? B().ramFalloff : B().meleeFalloff;
             const diff = Math.max(0, (piece.elev + F.WALL_TIERS[piece.tier].height) - this.terrain.heightAtPx(attacker.x, attacker.y));
             return 1 / (1 + diff * rate);
         }
@@ -387,7 +388,7 @@
         moveToward(a, tx, ty, dt) {
             const i = F.idx(a.gx, a.gy);
             let speed = a.type.speed / (1 + F.clamp(this.terrain.slope[i], 0, 1.6) * 1.1);
-            if (this.forts.moat[i]) speed *= 0.35;
+            if (this.forts.moat[i]) speed *= B().moatSlow;
             if (a.slow > 0) speed *= 0.5;
             const d = F.dist(a.x, a.y, tx, ty);
             if (d < 0.5) return;
@@ -403,8 +404,8 @@
             const st = this.forts.stakes.get(key);
             if (st && st.uses > 0) {
                 st.uses--;
-                this.damageAttacker(a, 24);
-                a.slow = 2;
+                this.damageAttacker(a, B().stakesDamage);
+                a.slow = B().stakesSlow;
                 this.effects.push({ kind: 'hit', x: a.x, y: a.y, t: 0, dur: 0.25, r: 1.2 });
                 if (st.uses <= 0) this.forts.stakes.delete(key);
             }
@@ -502,8 +503,9 @@
 
         sapperExplode(a) {
             a.dead = true;
-            this.effects.push({ kind: 'explosion', x: a.x, y: a.y, t: 0, dur: 0.6, r: 4.5 });
-            this.areaDamageDefenses(a.x, a.y, 4, 280);
+            const r = B().sapperRadius;
+            this.effects.push({ kind: 'explosion', x: a.x, y: a.y, t: 0, dur: 0.6, r: r + 0.5 });
+            this.areaDamageDefenses(a.x, a.y, r, B().sapperDamage);
         }
 
         /** Damage walls and towers in a radius (siege blasts). */
@@ -614,7 +616,7 @@
                 }
                 if (!target) continue;
                 t.cooldown = stats.rate;
-                const dmg = stats.dmg, aoe = stats.aoe;
+                const dmg = stats.dmg * B().towerDamageMult, aoe = stats.aoe;
                 const tgt = target;
                 this.projectiles.push(new F.Projectile(
                     t.x, t.y, tgt.x, tgt.y, stats.projectile === 'bolt' ? 45 : 34, stats.projectile,
@@ -637,6 +639,8 @@
         }
 
         updateOil(dt) {
+            const b = B();
+            const oilR = b.oilRadius;
             for (const p of this.forts.pieces.values()) {
                 if (!p.oil) continue;
                 p.oil.cooldown -= dt;
@@ -644,14 +648,14 @@
                 const px = F.cellCx(p.gx), py = F.cellCy(p.gy);
                 let any = false;
                 for (const a of this.attackers) {
-                    if (!a.dead && F.dist(a.x, a.y, px, py) < 4.5) { any = true; break; }
+                    if (!a.dead && F.dist(a.x, a.y, px, py) < oilR) { any = true; break; }
                 }
                 if (!any) continue;
-                p.oil.cooldown = 9;
-                this.effects.push({ kind: 'oil', x: px, y: py, t: 0, dur: 0.6, r: 4.5 });
+                p.oil.cooldown = b.oilCooldown;
+                this.effects.push({ kind: 'oil', x: px, y: py, t: 0, dur: 0.6, r: oilR });
                 for (const a of this.attackers) {
-                    if (!a.dead && F.dist(a.x, a.y, px, py) < 4.5 + a.type.radius) {
-                        this.damageAttacker(a, 65);
+                    if (!a.dead && F.dist(a.x, a.y, px, py) < oilR + a.type.radius) {
+                        this.damageAttacker(a, b.oilDamage);
                     }
                 }
             }

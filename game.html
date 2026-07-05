@@ -160,6 +160,44 @@
         details { font-size: 12px; color: #b8c4d0; }
         details summary { cursor: pointer; color: #8fc1e8; font-size: 12px; margin-bottom: 6px; }
         details li { margin: 3px 0 3px 16px; line-height: 1.4; }
+
+        /* Worldgen mode + advanced settings (menu overlay) */
+        .worldgen-row { display: flex; gap: 8px; justify-content: center; margin: 10px 0 4px; }
+        .worldgen-row button {
+            flex: 1; padding: 8px 6px; border-radius: 4px; border: 1px solid #45586b;
+            background: #2f3d4b; color: #cfd8e0; cursor: pointer; font-size: 13px;
+        }
+        .worldgen-row button.on { background: #b9722b; border-color: #d68a3a; color: #fff; }
+        .worldgen-note { font-size: 11px; color: #8fa3b8; line-height: 1.45; min-height: 15px; margin-bottom: 4px; }
+
+        #adv-settings { text-align: left; margin: 4px 0 2px; }
+        #adv-settings > summary { text-align: center; }
+        #settings-body {
+            max-height: 40vh; overflow-y: auto; margin: 6px 0;
+            padding-right: 4px; border-top: 1px solid #34424f;
+        }
+        .settings-group { margin-top: 10px; }
+        .settings-group h4 {
+            font-size: 10.5px; text-transform: uppercase; letter-spacing: 0.06em;
+            color: #8fa3b8; margin: 8px 0 5px; font-weight: 700;
+        }
+        .settings-group.fractal-only h4::after {
+            content: ' · fractal'; color: #b9722b; font-weight: 600;
+        }
+        .settings-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 4px 10px; }
+        .setting { display: flex; align-items: center; justify-content: space-between; gap: 6px; }
+        .setting label { font-size: 11px; color: #b8c4d0; flex: 1; }
+        .setting input[type=number] {
+            width: 66px; padding: 3px 5px; border-radius: 3px; border: 1px solid #45586b;
+            background: #1c2530; color: #fff; font-size: 11px; text-align: right;
+        }
+        .setting select {
+            padding: 3px 5px; border-radius: 3px; border: 1px solid #45586b;
+            background: #1c2530; color: #fff; font-size: 11px;
+        }
+        .setting input[type=checkbox] { width: 15px; height: 15px; accent-color: #b9722b; }
+        .settings-actions { display: flex; gap: 8px; margin-top: 8px; }
+        .settings-actions .ghost-btn { margin-top: 0; }
     </style>
 </head>
 <body>
@@ -200,6 +238,19 @@
                         <button data-d="normal" class="on">Normal</button>
                         <button data-d="hard">Hard</button>
                     </div>
+                    <div class="worldgen-row" id="worldgen-row">
+                        <button data-mode="valley" class="on">🏔 Forced valley</button>
+                        <button data-mode="fractal">🌋 Fractal + erosion</button>
+                    </div>
+                    <div class="worldgen-note" id="worldgen-note"></div>
+                    <details id="adv-settings">
+                        <summary>⚙ Advanced parameters</summary>
+                        <div id="settings-body"></div>
+                        <div class="settings-actions">
+                            <button class="ghost-btn" id="settings-apply">↻ Apply &amp; regenerate</button>
+                            <button class="ghost-btn" id="settings-reset">Reset to defaults</button>
+                        </div>
+                    </details>
                     <button class="big-btn" id="begin-btn">Begin the Defense</button>
                 </div>
             </div>
@@ -286,6 +337,7 @@
     <script src="libs/three.min.js"></script>
     <script src="libs/d3-delaunay.min.js"></script>
     <script src="game/core.js"></script>
+    <script src="game/config.js"></script>
     <script src="game/terrain.js"></script>
     <script src="game/pathfinding.js"></script>
     <script src="game/walls.js"></script>

@@ -29,17 +29,18 @@
         /** Movement/entry cost of a cell for the Dijkstra expansion. */
         enterCost(gx, gy) {
             const g = this.game;
+            const fw = F.CONFIG.flow;
             const i = F.idx(gx, gy);
             let c = 1 + F.clamp(g.terrain.slope[i], 0, 1.6) * 2.4;
-            if (g.forts.moat[i]) c *= 5;
+            if (g.forts.moat[i]) c *= fw.moatCostMult;
             if (g.buildingAt(gx, gy)) c += 8; // discourage cutting through yards
             const piece = g.forts.pieceAt(gx, gy);
             if (piece) {
                 // Cost of fighting through this wall: HP plus terrain advantage.
-                c += (piece.isGate ? 16 : 24) + piece.hp / 12 + piece.advantage * 0.5;
+                c += (piece.isGate ? fw.gateCost : fw.wallCost) + piece.hp / 12 + piece.advantage * 0.5;
             }
             const tower = g.forts.towerAt(gx, gy);
-            if (tower) c += 30 + tower.hp / 12;
+            if (tower) c += fw.towerCost + tower.hp / 12;
             return c;
         }
 
