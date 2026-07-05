@@ -1,3 +1,101 @@
+# Isolines
+
+Two applications built on contour-line terrain rendering:
+
+1. **Contour Map Creator** (`index.html`) — generate topographic contour maps from real elevation data
+2. **⚔ Hold the High Ground** (`game.html`) — a terrain-driven fortress defense game on procedurally generated fractal terrain
+
+---
+
+# ⚔ Hold the High Ground (Game)
+
+Open `game.html` in a browser. No build step, no server — Three.js is vendored in `libs/`.
+
+A **low-poly 3D fortress-defense RTS**. Every map is a fractal landform generated from
+scratch with the diamond-square algorithm: a high plateau split by a **ravine** that opens
+into a sheltered box canyon — a natural fortress roughly a football field across. Your keep
+sits in the canyon; the ravine narrows to a neck a dozen metres wide, and your first act is
+to **wall off the opening**.
+
+## The loop
+
+1. **Build** — draw fortifications freehand; there is no visible grid. The engine blends
+   your line into the terrain (ridge snapping, smoothing) and **snaps new walls onto
+   existing masonry**, Tiny-Glade style, so everything joins seamlessly. Walls render as
+   continuous extruded 3D curtains with battlements; breaches show as rubble gaps.
+2. **Siege** — waves pour up the ravine (and, later, across the plateau and down the
+   ramps). A Dijkstra flow field prices walls by strength *and elevation*, so armies
+   converge on your weakest, lowest point — exactly like real besiegers.
+3. **Grow** — each level the settlement spreads: down the valley, up the ramps, onto the
+   plateau. New houses land *outside* your walls, so the palisade around a canyon mouth
+   must become a citadel, then a walled city.
+
+## Terrain is the weapon
+
+- **Cliffs are free walls**: impassable to everyone; sealing the neck protects the whole canyon
+- Walls remember their elevation — melee attackers strike **uphill walls for less**
+- Towers gain range from height: cliff tops and ramparts are prime artillery ground
+- Enemy catapults and trebuchets also benefit from high ground — deny them the hills
+- Slopes slow attackers; moats slow them drastically
+
+## RTS camera & controls
+
+WASD pans, Q/E or middle-drag rotates, mouse wheel zooms. Click to draw walls
+(Enter/double-click builds, right-click undoes), click to place towers, oil cauldrons,
+stakes, moats; click walls to upgrade, repair, or demolish.
+
+## Defenses
+
+| Defense | Notes |
+|---|---|
+| Palisade → Stone → Fortified walls | Upgradable in place (whole connected runs) |
+| Gates | Weaker, attract rams — but a gated enclosure earns +25% trade income |
+| Watchtower → Archer Tower → Ballista | On ground or **on walls** for the height bonus; ballistae prioritize siege engines |
+| Oil cauldrons | Mounted on wall sections; scald attackers at the foot of the wall |
+| Stakes | Wound and slow the first attackers through |
+| Moats | Dug cell by cell; attackers wade at ⅓ speed |
+| Repair / Demolish | Fix damaged runs, or reclaim 30% of cost |
+
+## The enemy: Bronze Age → Medieval
+
+- **Bronze Age (levels 1–3):** raiders, spearmen, slingers, war chieftains — raiding parties up the ravine
+- **Iron Age (levels 4–6):** swordsmen, archers, shieldbearers, battering rams
+- **Medieval (levels 7+):** knights, crossbowmen, sappers with demolition charges, catapults, siege towers that deploy troops over your walls, trebuchets, and the enemy warlord
+
+Waves escalate tower-defense style within each level. Difficulty settings (Easy/Normal/Hard) scale enemy strength.
+
+## Engine architecture
+
+```
+game.html            - Game page and UI shell
+libs/three.min.js    - Three.js r128 (vendored)
+libs/d3-delaunay.min.js - Delaunay/Voronoi for the organic terrain mesh (vendored)
+game/core.js         - Grid constants, seeded PRNG, supercover raster, binary heap
+game/terrain.js      - Diamond-square fractal + ravine/box-canyon carving, cliff masking
+game/pathfinding.js  - Dijkstra flow field; soft (HP+elevation weighted) walls, hard cliffs
+game/walls.js        - Wall drawing with terrain blending & organic snapping, tiers, gates,
+                       towers, traps, enclosure detection (cliffs count as walls)
+game/units.js        - Attacker types across three eras, projectiles
+game/waves.js        - Wave composition and era progression
+game/engine.js       - Game state machine, economy, combat resolution, input tools
+game/render3d.js     - Low-poly 3D renderer: organic terrain surface (Lloyd-relaxed
+                       point set + Delaunay triangulation, densified along cliffs),
+                       extruded wall curtains, instanced units, RTS camera, shadows
+game/ui.js           - DOM wiring, camera controls, raycast picking, HP-bar overlay
+```
+
+The visible terrain has no rectangular lattice: a seeded point cloud is evened out
+with two rounds of Lloyd relaxation (centroidal Voronoi), extra points are seeded
+along steep ground so cliff faces stay crisp, and the set is Delaunay-triangulated
+into irregular flat-shaded facets. The simulation runs on an invisible 1 m grid
+underneath purely as a navigation/enclosure acceleration structure; the presentation
+never shows it. Enclosure
+detection flood-fills from the map border with the same movement rules attackers use
+(cliffs and walls both block), so a house is "protected" exactly when no attacker can
+walk to it.
+
+---
+
 # Contour Map Creator
 
 A web-based application for generating topographic contour maps from elevation data using intelligent sampling and advanced algorithms.
