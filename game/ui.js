@@ -139,15 +139,136 @@
             $('pause-btn').textContent = game.paused ? '▶' : '⏸';
         });
 
+        /* -------------------- worldgen & advanced settings ----------------- */
+        const ctrlId = (path) => 'cfg-' + path.replace(/\./g, '-');
+
+        function coerceCtrl(ctrl, el) {
+            if (ctrl.type === 'checkbox') return el.checked;
+            if (ctrl.type === 'select') return el.value;
+            let v = parseFloat(el.value);
+            if (!isFinite(v)) v = F.configGet(ctrl.path, F.CONFIG_DEFAULTS);
+            if (ctrl.min != null) v = Math.max(ctrl.min, v);
+            if (ctrl.max != null) v = Math.min(ctrl.max, v);
+            if (ctrl.int) v = Math.round(v);
+            return v;
+        }
+
+        function buildSettings() {
+            const body = $('settings-body');
+            body.innerHTML = '';
+            for (const group of F.CONFIG_SCHEMA) {
+                const g = document.createElement('div');
+                g.className = 'settings-group' + (group.fractal ? ' fractal-only' : '');
+                const h = document.createElement('h4');
+                h.textContent = group.title;
+                g.appendChild(h);
+                const grid = document.createElement('div');
+                grid.className = 'settings-grid';
+                for (const ctrl of group.controls) {
+                    const cell = document.createElement('div');
+                    cell.className = 'setting' + (ctrl.fractal ? ' fractal-only' : '');
+                    const lab = document.createElement('label');
+                    lab.textContent = ctrl.label;
+                    lab.setAttribute('for', ctrlId(ctrl.path));
+                    const val = F.configGet(ctrl.path);
+                    let input;
+                    if (ctrl.type === 'select') {
+                        input = document.createElement('select');
+                        for (const [v, text] of ctrl.options) {
+                            const o = document.createElement('option');
+                            o.value = v; o.textContent = text;
+                            if (v === val) o.selected = true;
+                            input.appendChild(o);
+                        }
+                    } else if (ctrl.type === 'checkbox') {
+                        input = document.createElement('input');
+                        input.type = 'checkbox';
+                        input.checked = !!val;
+                    } else {
+                        input = document.createElement('input');
+                        input.type = 'number';
+                        if (ctrl.min != null) input.min = ctrl.min;
+                        if (ctrl.max != null) input.max = ctrl.max;
+                        if (ctrl.step != null) input.step = ctrl.step;
+                        input.value = val;
+                    }
+                    input.id = ctrlId(ctrl.path);
+                    cell.appendChild(lab);
+                    cell.appendChild(input);
+                    grid.appendChild(cell);
+                }
+                g.appendChild(grid);
+                body.appendChild(g);
+            }
+            const modeSel = $(ctrlId('terrain.mode'));
+            if (modeSel) modeSel.addEventListener('change', () => syncMode(modeSel.value));
+        }
+
+        function applyConfigFromUI() {
+            for (const group of F.CONFIG_SCHEMA) {
+                for (const ctrl of group.controls) {
+                    const el = $(ctrlId(ctrl.path));
+                    if (el) F.configSet(ctrl.path, coerceCtrl(ctrl, el));
+                }
+            }
+        }
+
+        function repopulateSettings() {
+            for (const group of F.CONFIG_SCHEMA) {
+                for (const ctrl of group.controls) {
+                    const el = $(ctrlId(ctrl.path));
+                    if (!el) continue;
+                    const val = F.configGet(ctrl.path);
+                    if (ctrl.type === 'checkbox') el.checked = !!val;
+                    else el.value = val;
+                }
+            }
+        }
+
+        const MODE_NOTES = {
+            valley: 'A guaranteed box-canyon fortress: sheer cliffs on every side, one ravine mouth to wall off.',
+            fractal: 'A random landform, weathered by hydraulic (droplet) erosion and depression-filling. Every seed plays differently — with no ready-made fortress, pick your ground.'
+        };
+
+        function syncMode(mode) {
+            F.CONFIG.terrain.mode = mode;
+            $('worldgen-row').querySelectorAll('button').forEach(b =>
+                b.classList.toggle('on', b.dataset.mode === mode));
+            const sel = $(ctrlId('terrain.mode'));
+            if (sel && sel.value !== mode) sel.value = mode;
+            $('worldgen-note').textContent = MODE_NOTES[mode] || '';
+            document.querySelectorAll('#settings-body .fractal-only').forEach(el =>
+                el.style.opacity = mode === 'fractal' ? '1' : '0.45');
+        }
+
+        buildSettings();
+        syncMode(F.CONFIG.terrain.mode);
+
+        $('worldgen-row').querySelectorAll('button').forEach(btn => {
+            btn.addEventListener('click', () => syncMode(btn.dataset.mode));
+        });
+        $('settings-apply').addEventListener('click', () => {
+            applyConfigFromUI();
+            game.newRun($('seed-input').value || game.seedStr);
+            game.state = 'menu';
+        });
+        $('settings-reset').addEventListener('click', () => {
+            F.resetConfig();
+            repopulateSettings();
+            syncMode(F.CONFIG.terrain.mode);
+        });
+
         /* ----------------------------- overlays ---------------------------- */
         $('seed-input').value = game.seedStr;
         $('regen-btn').addEventListener('click', () => {
             const seed = String(Math.floor(Math.random() * 1e9));
             $('seed-input').value = seed;
+            applyConfigFromUI();
             game.newRun(seed);
             game.state = 'menu';
         });
         $('seed-input').addEventListener('change', () => {
+            applyConfigFromUI();
             game.newRun($('seed-input').value || 'default');
             game.state = 'menu';
         });
@@ -159,17 +280,21 @@
             });
         });
         $('begin-btn').addEventListener('click', () => {
+            applyConfigFromUI();
+            game.newRun($('seed-input').value || game.seedStr);
             $('menu-overlay').classList.remove('show');
             game.state = 'build';
             game.emit('state');
         });
         $('retry-btn').addEventListener('click', () => {
+            applyConfigFromUI();
             game.newRun(game.seedStr);
             $('over-overlay').classList.remove('show');
             game.state = 'build';
             game.emit('state');
         });
         $('newland-btn').addEventListener('click', () => {
+            applyConfigFromUI();
             game.newRun(String(Math.floor(Math.random() * 1e9)));
             $('seed-input').value = game.seedStr;
             $('over-overlay').classList.remove('show');

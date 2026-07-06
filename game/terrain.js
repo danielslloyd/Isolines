@@ -1,12 +1,18 @@
 /**
- * Fractal terrain generation — box-canyon edition.
+ * Fractal terrain generation.
  *
- * The land is a high plateau (diamond-square fractal relief) with a ravine
- * carved from the south edge that opens into a sheltered bowl: a natural
- * fortress. The ravine narrows to a neck a dozen metres wide — the opening
- * the player walls off first. Two side ramps connect the approach valley to
- * the plateau, so later assaults (and later city growth) climb out of the
- * canyon.
+ * Two modes, selected in F.CONFIG.terrain.mode:
+ *
+ *   'valley'  — the forced box-canyon fortress. A high plateau (diamond-square
+ *               relief) with a ravine carved from the south edge that opens
+ *               into a sheltered bowl. The ravine narrows to a neck; two side
+ *               ramps climb to the plateau. A guaranteed natural stronghold.
+ *
+ *   'fractal' — a random diamond-square landform that is then weathered:
+ *               hydraulic (droplet) erosion carves drainage valleys and ridges,
+ *               and a priority-flood fill removes pits so water drains. The keep
+ *               is dropped into the lowest sheltered basin the weathering leaves
+ *               behind, so no two maps play alike.
  *
  * Heights are metres on an invisible 1 m simulation grid. Cells steeper than
  * CLIFF_SLOPE are impassable to everyone — cliffs are walls nature built.
@@ -75,6 +81,165 @@
 
     const smoothstep = (t) => { t = F.clamp(t, 0, 1); return t * t * (3 - 2 * t); };
 
+    function normalizeGrid(h) {
+        let min = Infinity, max = -Infinity;
+        for (let i = 0; i < h.length; i++) { if (h[i] < min) min = h[i]; if (h[i] > max) max = h[i]; }
+        const span = (max - min) || 1;
+        for (let i = 0; i < h.length; i++) h[i] = (h[i] - min) / span;
+    }
+
+    /* ------------------------------------------------------------------ *
+     * Weathering: droplet erosion + depression filling + smoothing
+     * ------------------------------------------------------------------ */
+
+    /** Circular erosion brush: normalized [dx, dy, weight] offsets. */
+    function makeBrush(radius) {
+        const r = Math.max(0, Math.round(radius));
+        const brush = [];
+        let sum = 0;
+        for (let dy = -r; dy <= r; dy++) {
+            for (let dx = -r; dx <= r; dx++) {
+                const d = Math.hypot(dx, dy);
+                if (d > r) continue;
+                let w = r - d;
+                if (dx === 0 && dy === 0 && w <= 0) w = 1; // radius 0: single cell
+                if (w <= 0) continue;
+                brush.push([dx, dy, w]);
+                sum += w;
+            }
+        }
+        for (const e of brush) e[2] /= sum || 1;
+        return brush;
+    }
+
+    /**
+     * Hydraulic erosion on a W×H height grid (normalized units), in place.
+     * A classic droplet model (Beyer / Lague): each raindrop follows the
+     * gradient, picking up rock on steep descents and dropping sediment where
+     * the slope eases, cutting drainage valleys into the fractal.
+     */
+    function hydraulicErode(h, W, H, p, rng) {
+        const brush = makeBrush(p.radius);
+        const inertia = F.clamp(p.inertia, 0, 0.99);
+
+        const heightGrad = (posX, posY) => {
+            const nx = posX | 0, ny = posY | 0;
+            const x = posX - nx, y = posY - ny;
+            const i = ny * W + nx;
+            const nw = h[i], ne = h[i + 1], sw = h[i + W], se = h[i + W + 1];
+            return {
+                nx, ny, x, y,
+                height: nw * (1 - x) * (1 - y) + ne * x * (1 - y) + sw * (1 - x) * y + se * x * y,
+                gradX: (ne - nw) * (1 - y) + (se - sw) * y,
+                gradY: (sw - nw) * (1 - x) + (se - ne) * x
+            };
+        };
+
+        for (let d = 0; d < p.droplets; d++) {
+            let posX = 1 + rng() * (W - 3);
+            let posY = 1 + rng() * (H - 3);
+            let dirX = 0, dirY = 0, speed = 1, water = 1, sediment = 0;
+
+            for (let life = 0; life < p.lifetime; life++) {
+                const s = heightGrad(posX, posY);
+                dirX = dirX * inertia - s.gradX * (1 - inertia);
+                dirY = dirY * inertia - s.gradY * (1 - inertia);
+                const len = Math.hypot(dirX, dirY);
+                if (len < 1e-6) break;              // stuck in a flat pit
+                dirX /= len; dirY /= len;
+                posX += dirX; posY += dirY;
+                if (posX < 1 || posX >= W - 2 || posY < 1 || posY >= H - 2) break;
+
+                const newHeight = heightGrad(posX, posY).height;
+                const deltaH = newHeight - s.height;   // <0 downhill
+
+                const capacity = Math.max(-deltaH, p.minSlope) * speed * water * p.capacity;
+
+                if (sediment > capacity || deltaH > 0) {
+                    // Drop sediment (fully fill an uphill step, else settle a share).
+                    const amount = deltaH > 0
+                        ? Math.min(deltaH, sediment)
+                        : (sediment - capacity) * p.deposition;
+                    sediment -= amount;
+                    const i = s.ny * W + s.nx;
+                    h[i]         += amount * (1 - s.x) * (1 - s.y);
+                    h[i + 1]     += amount * s.x * (1 - s.y);
+                    h[i + W]     += amount * (1 - s.x) * s.y;
+                    h[i + W + 1] += amount * s.x * s.y;
+                } else {
+                    // Erode, spread across the brush, never below the drop.
+                    const amount = Math.min((capacity - sediment) * p.erosion, -deltaH);
+                    sediment += amount;
+                    for (const [bx, by, bw] of brush) {
+                        const cx = s.nx + bx, cy = s.ny + by;
+                        if (cx < 0 || cy < 0 || cx >= W || cy >= H) continue;
+                        h[cy * W + cx] -= amount * bw;
+                    }
+                }
+
+                speed = Math.sqrt(Math.max(0, speed * speed + deltaH * p.gravity));
+                water *= (1 - p.evaporation);
+                if (water < 1e-3) break;
+            }
+        }
+    }
+
+    /**
+     * Priority-flood depression fill (Barnes 2014). Returns a surface where
+     * every interior cell can drain to the border, with a tiny epsilon slope so
+     * flats still shed water. Blended over the raw map by `strength`.
+     */
+    function fillDepressions(h, W, H, eps) {
+        const N = W * H;
+        const out = new Float32Array(N);
+        const closed = new Uint8Array(N);
+        const heap = new F.MinHeap();
+        const seed = (i, v) => { out[i] = v; closed[i] = 1; heap.push(i, v); };
+
+        for (let gx = 0; gx < W; gx++) { seed(gx, h[gx]); seed((H - 1) * W + gx, h[(H - 1) * W + gx]); }
+        for (let gy = 0; gy < H; gy++) { seed(gy * W, h[gy * W]); seed(gy * W + W - 1, h[gy * W + W - 1]); }
+
+        while (heap.size > 0) {
+            const c = heap.pop();
+            const cx = c % W, cy = (c / W) | 0;
+            for (let dy = -1; dy <= 1; dy++) {
+                for (let dx = -1; dx <= 1; dx++) {
+                    if (!dx && !dy) continue;
+                    const nx = cx + dx, ny = cy + dy;
+                    if (nx < 0 || ny < 0 || nx >= W || ny >= H) continue;
+                    const ni = ny * W + nx;
+                    if (closed[ni]) continue;
+                    out[ni] = Math.max(h[ni], out[c] + eps);
+                    closed[ni] = 1;
+                    heap.push(ni, out[ni]);
+                }
+            }
+        }
+        return out;
+    }
+
+    /** In-place box-blur passes, each blended by `strength`. */
+    function smoothGrid(h, W, H, passes, strength) {
+        if (passes <= 0 || strength <= 0) return;
+        const tmp = new Float32Array(h.length);
+        for (let pass = 0; pass < passes; pass++) {
+            for (let gy = 0; gy < H; gy++) {
+                for (let gx = 0; gx < W; gx++) {
+                    let sum = 0, cnt = 0;
+                    for (let dy = -1; dy <= 1; dy++) {
+                        for (let dx = -1; dx <= 1; dx++) {
+                            const nx = gx + dx, ny = gy + dy;
+                            if (nx < 0 || ny < 0 || nx >= W || ny >= H) continue;
+                            sum += h[ny * W + nx]; cnt++;
+                        }
+                    }
+                    tmp[gy * W + gx] = sum / cnt;
+                }
+            }
+            for (let i = 0; i < h.length; i++) h[i] = F.lerp(h[i], tmp[i], strength);
+        }
+    }
+
     class Terrain {
         constructor(seed) {
             this.seed = seed;
@@ -82,15 +247,28 @@
         }
 
         generate() {
-            const rng = F.mulberry32(this.seed);
-            const broad = diamondSquare(7, 1.0, rng);
-            const detail = diamondSquare(7, 1.0, F.mulberry32(this.seed ^ 0x9e3779b9));
+            const cfg = (F.CONFIG && F.CONFIG.terrain) || { mode: 'valley' };
             const W = F.GRID_W, H = F.GRID_H;
-
             this.h = new Float32Array(W * H);
             this.slope = new Float32Array(W * H);
             this.cliff = new Uint8Array(W * H);
             this.water = new Uint8Array(W * H);   // kept for API compat; no water here
+            this.ramps = [];
+
+            const rng = F.mulberry32(this.seed);
+            if (cfg.mode === 'fractal') this.generateFractal(rng, cfg);
+            else this.generateValley(rng, cfg);
+
+            this.deriveFields();
+            if (cfg.mode === 'fractal') this.placeFractalLandmarks();
+        }
+
+        /* -------------------------- valley mode -------------------------- */
+
+        generateValley(rng, cfg) {
+            const broad = diamondSquare(7, 1.0, rng);
+            const detail = diamondSquare(7, 1.0, F.mulberry32(this.seed ^ 0x9e3779b9));
+            const W = F.GRID_W, H = F.GRID_H;
 
             // --- Landform key points (south edge is gy = 0) --------------
             const wob = (rng() - 0.5) * 14;
@@ -162,8 +340,94 @@
                     this.h[F.idx(gx, gy)] = h;
                 }
             }
+        }
 
-            // --- Derived fields -------------------------------------------
+        /* -------------------------- fractal mode ------------------------- */
+
+        generateFractal(rng, cfg) {
+            const W = F.GRID_W, H = F.GRID_H;
+            const octaves = Math.max(5, Math.round(cfg.fractalOctaves || 7));
+            const base = diamondSquare(octaves, cfg.fractalRoughness || 1.0, rng);
+            const detail = diamondSquare(octaves, cfg.fractalRoughness || 1.0,
+                F.mulberry32(this.seed ^ 0x9e3779b9));
+
+            // Sample the fractal onto the working grid in normalized [0,1].
+            const hm = new Float32Array(W * H);
+            for (let gy = 0; gy < H; gy++) {
+                for (let gx = 0; gx < W; gx++) {
+                    hm[F.idx(gx, gy)] = sampleDS(base, gx / (W - 1), gy / (H - 1));
+                }
+            }
+
+            // Weather it: erode, then fill depressions and smooth.
+            const ero = cfg.erosion || {};
+            if (ero.enabled && ero.droplets > 0) {
+                hydraulicErode(hm, W, H, ero, rng);
+                normalizeGrid(hm);
+            }
+            const fl = cfg.fill || {};
+            if (fl.enabled) {
+                const filled = fillDepressions(hm, W, H, fl.epsilon || 0);
+                const s = F.clamp(fl.strength == null ? 1 : fl.strength, 0, 1);
+                for (let i = 0; i < hm.length; i++) hm[i] = F.lerp(hm[i], filled[i], s);
+                smoothGrid(hm, W, H, fl.smoothPasses | 0, F.clamp(fl.smoothStrength || 0, 0, 1));
+            }
+            normalizeGrid(hm);
+
+            // Lift into metres and layer a little fine fractal detail on top.
+            const base0 = cfg.baseHeight || 0;
+            const relief = cfg.reliefScale || 20;
+            const amp = cfg.detailAmp || 0;
+            for (let gy = 0; gy < H; gy++) {
+                for (let gx = 0; gx < W; gx++) {
+                    const i = F.idx(gx, gy);
+                    const u = gx / (W - 1), v = gy / (H - 1);
+                    this.h[i] = base0 + hm[i] * relief + (sampleDS(detail, u, v) - 0.5) * amp;
+                }
+            }
+        }
+
+        /**
+         * With no forced valley, drop the keep into the best natural stronghold
+         * the weathering produced: a low, flat, non-cliff spot toward the middle
+         * of the map. Synthesize the bowl/neck the renderer and economy expect.
+         */
+        placeFractalLandmarks() {
+            const W = F.GRID_W, H = F.GRID_H;
+            let best = null, bestScore = Infinity;
+            const x0 = Math.floor(W * 0.20), x1 = Math.ceil(W * 0.80);
+            const y0 = Math.floor(H * 0.28), y1 = Math.ceil(H * 0.78);
+            for (let gy = y0; gy <= y1; gy++) {
+                for (let gx = x0; gx <= x1; gx++) {
+                    const i = F.idx(gx, gy);
+                    if (this.cliff[i]) continue;
+                    if (this.slope[i] > 0.4) continue;
+                    // Prefer low ground (sheltered) that is also flat.
+                    const score = this.h[i] + this.slope[i] * 28;
+                    if (score < bestScore) { bestScore = score; best = [gx, gy]; }
+                }
+            }
+            if (!best) best = [Math.round(W / 2), Math.round(H / 2)];
+            const [kx, ky] = best;
+
+            this.bowl = { x: kx + 0.5, z: ky + 0.5, rx: 18, rz: 15 };
+            // Neck: a point partway toward the nearest map edge, used only to
+            // frame the opening shot. Head toward the closest border.
+            const toN = ky, toS = H - ky, toW = kx, toE = W - kx;
+            const m = Math.min(toN, toS, toW, toE);
+            let nx = kx, nz = ky;
+            if (m === toN) nz = ky * 0.5;
+            else if (m === toS) nz = ky + (H - ky) * 0.5;
+            else if (m === toW) nx = kx * 0.5;
+            else nx = kx + (W - kx) * 0.5;
+            this.neck = { x: nx + 0.5, z: nz + 0.5, w: 9, fh: this.h[F.idx(kx, ky)] };
+        }
+
+        /* -------------------------- shared ------------------------------ */
+
+        /** Derive min/max, slope and cliff mask from the metres height field. */
+        deriveFields() {
+            const W = F.GRID_W, H = F.GRID_H;
             let min = Infinity, max = -Infinity;
             for (let i = 0; i < this.h.length; i++) {
                 if (this.h[i] < min) min = this.h[i];

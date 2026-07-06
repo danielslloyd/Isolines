@@ -200,17 +200,23 @@
          */
         buildTerrain(t) {
             const W = F.WORLD_W, H = F.WORLD_H;
+            const m = (F.CONFIG && F.CONFIG.mesh) || {};
+            const basePoints = m.basePoints || 5200;
+            const lloydRounds = m.lloydRounds == null ? 2 : m.lloydRounds;
+            const densifyCount = m.densifyCount == null ? 2400 : m.densifyCount;
+            const densifyTries = m.densifyTries || 30000;
+            const densifySlope = m.densifySlope == null ? 0.7 : m.densifySlope;
+            const boundaryStep = m.boundaryStep || 2.5;
             const rng = F.mulberry32(this.game.seed ^ 0x0b5e55ed);
 
             // 1. Seeded random interior points
             const pts = [];
-            const BASE = 5200;
-            for (let i = 0; i < BASE; i++) {
+            for (let i = 0; i < basePoints; i++) {
                 pts.push([1.5 + rng() * (W - 3), 1.5 + rng() * (H - 3)]);
             }
 
             // 2. Lloyd relaxation: move each point to its Voronoi cell centroid
-            for (let iter = 0; iter < 2; iter++) {
+            for (let iter = 0; iter < lloydRounds; iter++) {
                 const vor = d3.Delaunay.from(pts).voronoi([0.5, 0.5, W - 0.5, H - 0.5]);
                 for (let i = 0; i < pts.length; i++) {
                     const poly = vor.cellPolygon(i);
@@ -230,18 +236,19 @@
 
             // 3. Densify where the land is steep so cliff faces stay crisp
             let added = 0, tries = 0;
-            while (added < 2400 && tries < 30000) {
+            while (added < densifyCount && tries < densifyTries) {
                 tries++;
                 const x = 1 + rng() * (W - 2), z = 1 + rng() * (H - 2);
-                if (t.slopeAtCell(F.toCell(x), F.toCellY(z)) > 0.7) {
+                if (t.slopeAtCell(F.toCell(x), F.toCellY(z)) > densifySlope) {
                     pts.push([x, z]);
                     added++;
                 }
             }
 
             // 4. Boundary ring so the hull stays rectangular
-            for (let x = 0; x <= W; x += 2.5) { pts.push([x, 0], [x, H]); }
-            for (let z = 2.5; z < H; z += 2.5) { pts.push([0, z], [W, z]); }
+            const bs = boundaryStep;
+            for (let x = 0; x <= W; x += bs) { pts.push([x, 0], [x, H]); }
+            for (let z = bs; z < H; z += bs) { pts.push([0, z], [W, z]); }
 
             // 5. Triangulate and emit flat-shaded facets
             const del = d3.Delaunay.from(pts);

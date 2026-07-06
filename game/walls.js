@@ -345,7 +345,7 @@
         }
 
         placeStakes(gx, gy) {
-            this.stakes.set(F.idx(gx, gy), { gx, gy, uses: 6 });
+            this.stakes.set(F.idx(gx, gy), { gx, gy, uses: F.CONFIG.balance.stakesUses });
         }
 
         digMoat(gx, gy) {

@@ -23,10 +23,11 @@
 
     /** Difficulty scaling applied to unit stats. */
     F.waveScale = function (level, difficulty) {
-        const d = { easy: 0.75, normal: 1.0, hard: 1.3 }[difficulty] || 1;
+        const b = F.CONFIG.balance;
+        const d = { easy: b.diffEasy, normal: b.diffNormal, hard: b.diffHard }[difficulty] || b.diffNormal;
         return {
-            hp: d * (1 + (level - 1) * 0.10),
-            dmg: d * (1 + (level - 1) * 0.07)
+            hp: d * b.enemyHpMult * (1 + (level - 1) * b.hpPerLevel),
+            dmg: d * b.enemyDmgMult * (1 + (level - 1) * b.dmgPerLevel)
         };
     };
 
@@ -69,6 +70,14 @@
             if (last) {
                 g.push({ type: 'warlord', count: 1, delay: 20 });
                 g.push({ type: 'knight', count: 3 + Math.floor(level / 3), delay: 22 });
+            }
+        }
+        // Global wave-size multiplier (bosses stay singular).
+        const mult = F.CONFIG.balance.enemyCountMult;
+        if (mult !== 1) {
+            for (const grp of g) {
+                if (F.UNIT_TYPES[grp.type].special === 'boss') continue;
+                grp.count = Math.max(1, Math.round(grp.count * mult));
             }
         }
         return g;

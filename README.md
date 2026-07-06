@@ -12,10 +12,20 @@ Two applications built on contour-line terrain rendering:
 Open `game.html` in a browser. No build step, no server — Three.js is vendored in `libs/`.
 
 A **low-poly 3D fortress-defense RTS**. Every map is a fractal landform generated from
-scratch with the diamond-square algorithm: a high plateau split by a **ravine** that opens
-into a sheltered box canyon — a natural fortress roughly a football field across. Your keep
-sits in the canyon; the ravine narrows to a neck a dozen metres wide, and your first act is
-to **wall off the opening**.
+scratch with the diamond-square algorithm. Two worldgen modes (chosen in the menu):
+
+- **Forced valley** *(default)* — a high plateau split by a **ravine** that opens into a
+  sheltered box canyon: a guaranteed natural fortress roughly a football field across. Your
+  keep sits in the canyon; the ravine narrows to a neck a dozen metres wide, and your first
+  act is to **wall off the opening**.
+- **Fractal + erosion** — no forced valley. A random diamond-square heightmap is **weathered**
+  by hydraulic (droplet) erosion, then **depression-filled** so water drains and pits soften.
+  The keep drops into the lowest sheltered basin the weathering leaves behind. There is no
+  ready-made fortress — you pick your ground and wall a full perimeter. Every seed plays
+  differently.
+
+Nearly every worldgen and balance number is exposed under **⚙ Advanced parameters** in the
+menu (see [Settings & tuning](#settings--tuning)).
 
 ## The loop
 
@@ -64,6 +74,28 @@ stakes, moats; click walls to upgrade, repair, or demolish.
 
 Waves escalate tower-defense style within each level. Difficulty settings (Easy/Normal/Hard) scale enemy strength.
 
+## Settings & tuning
+
+Every worldgen and balance constant lives in `game/config.js` as `Fortress.CONFIG`, and the
+menu's **⚙ Advanced parameters** panel edits them live (Apply & regenerate previews, Reset to
+defaults reverts). Defaults reproduce the classic game exactly. Grouped controls cover:
+
+- **World generation** — terrain mode, fractal octaves/roughness, relief (m), base height, fine detail.
+- **Erosion** *(fractal)* — droplet count & lifetime, inertia, sediment capacity, erode/deposit
+  rates, evaporation, gravity, brush radius.
+- **Filling & weathering** *(fractal)* — priority-flood drain slope, fill strength, smoothing passes/blend.
+- **Organic mesh surface** — seeded point count, Lloyd relaxation rounds, cliff densification
+  count/slope/budget, boundary hull spacing.
+- **Economy** — starting gold, keep/house HP, civilians per house, income formula, gate bonus,
+  level grants, houses per level.
+- **Difficulty & enemies** — per-difficulty multipliers, HP/damage growth per level, global
+  enemy HP/damage/count multipliers, tower damage multiplier, uphill melee falloff.
+- **Field defenses** — oil, stakes, moat, and sapper numbers.
+- **Siege pathing weights** — flow-field costs for moats, walls, gates and towers.
+
+Tweaks apply when you generate land (🎲 New land / Apply) or **Begin the Defense**. You can
+also poke `Fortress.CONFIG` directly from the dev console.
+
 ## Engine architecture
 
 ```
@@ -71,7 +103,9 @@ game.html            - Game page and UI shell
 libs/three.min.js    - Three.js r128 (vendored)
 libs/d3-delaunay.min.js - Delaunay/Voronoi for the organic terrain mesh (vendored)
 game/core.js         - Grid constants, seeded PRNG, supercover raster, binary heap
-game/terrain.js      - Diamond-square fractal + ravine/box-canyon carving, cliff masking
+game/config.js       - Central tunable config (worldgen + balance) and the settings UI schema
+game/terrain.js      - Diamond-square fractal; forced box-canyon carving OR eroded/filled
+                       fractal landform; cliff masking
 game/pathfinding.js  - Dijkstra flow field; soft (HP+elevation weighted) walls, hard cliffs
 game/walls.js        - Wall drawing with terrain blending & organic snapping, tiers, gates,
                        towers, traps, enclosure detection (cliffs count as walls)
@@ -85,9 +119,10 @@ game/ui.js           - DOM wiring, camera controls, raycast picking, HP-bar over
 ```
 
 The visible terrain has no rectangular lattice: a seeded point cloud is evened out
-with two rounds of Lloyd relaxation (centroidal Voronoi), extra points are seeded
+with Lloyd relaxation (centroidal Voronoi, two rounds by default), extra points are seeded
 along steep ground so cliff faces stay crisp, and the set is Delaunay-triangulated
-into irregular flat-shaded facets. The simulation runs on an invisible 1 m grid
+into irregular flat-shaded facets. All four knobs — seed-point count, relaxation rounds,
+densification count and slope threshold — are configurable in the settings panel. The simulation runs on an invisible 1 m grid
 underneath purely as a navigation/enclosure acceleration structure; the presentation
 never shows it. Enclosure
 detection flood-fills from the map border with the same movement rules attackers use
